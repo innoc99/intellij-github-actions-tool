@@ -1,0 +1,116 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <!-- 플러그인 ID: 고유해야 함 -->
+    <id>io.github.innoc99.intellij-github-actions-tool</id>
+
+    <!-- 플러그인 이름 -->
+    <name>GitHub Actions Tool</name>
+
+    <!-- 벤더 정보 -->
+    <vendor email="innoc@daum.net" url="https://github.com/innoc99">innoc99</vendor>
+
+    <!-- 플러그인 설명 -->
+    <description><![CDATA[
+    <h2>GitHub Actions Tool</h2>
+    <p>GitHub Enterprise (On-Prem) 환경을 위한 GitHub Actions 워크플로우 모니터링 및 실행 도구.<br>
+    IDE 안에서 워크플로우 상태 확인, 로그 조회, 수동 실행(Dispatch)을 모두 처리할 수 있습니다.</p>
+
+    <h3>주요 기능</h3>
+    <ul>
+        <li><b>워크플로우 모니터링</b> — 전체 워크플로우 목록 및 실행(Run) 상태를 실시간 자동 갱신</li>
+        <li><b>워크플로우 수동 실행</b> — workflow_dispatch 이벤트를 지원하는 워크플로우를 IDE에서 직접 Dispatch</li>
+        <li><b>Jobs/Steps 상세 조회</b> — Run별 Job 트리와 Step 단위 로그를 GitHub Enterprise 스타일로 표시</li>
+        <li><b>로그 검색</b> — Step 로그 내 키워드 검색, 매칭 라인 자동 하이라이트 및 펼침</li>
+        <li><b>상태/브랜치 필터</b> — 실행 결과(success, failure 등)와 브랜치별 필터링</li>
+        <li><b>Quick Search</b> — Run 목록에서 타이핑 즉시 이름 검색 (Speed Search)</li>
+        <li><b>VCS 자동 감지</b> — Git remote에서 GitHub 서버/Owner/Repository를 자동 감지</li>
+        <li><b>IntelliJ GitHub 계정 연동</b> — IntelliJ에 등록된 GitHub 계정 토큰을 그대로 활용 (별도 PAT 입력 불필요)</li>
+    </ul>
+
+    <h3>화면 구성</h3>
+    <p>Tool Window는 4개 영역으로 구성됩니다:</p>
+    <ol>
+        <li><b>워크플로우 트리</b> — 전체 워크플로우 목록. "전체 히스토리" 또는 특정 워크플로우 선택</li>
+        <li><b>실행(Run) 목록</b> — 선택한 워크플로우의 최근 실행 기록. 상태/브랜치 필터 적용 가능</li>
+        <li><b>Jobs 상세 트리</b> — 선택한 Run의 Job 목록을 그룹 트리로 표시</li>
+        <li><b>Step 로그 패널</b> — 선택한 Job의 Step별 collapsible 로그 뷰</li>
+    </ol>
+
+    <h3>인증 설정</h3>
+    <p>두 가지 인증 방식을 지원합니다:</p>
+    <ul>
+        <li><b>IntelliJ GitHub 계정 사용 (기본값, 권장)</b> — Settings > Version Control > GitHub에 등록된 계정 토큰 자동 활용</li>
+        <li><b>Personal Access Token 직접 입력</b> — Settings > Tools > GitHub Actions Tool에서 체크 해제 후 토큰 입력</li>
+    </ul>
+
+    <h3>사용법</h3>
+    <ul>
+        <li>하단 탭 바에서 <b>GitHub Actions</b> 탭 클릭 (또는 View > Tool Windows > GitHub Actions)</li>
+        <li>워크플로우 선택 → Run 클릭 → Job 클릭 → Step 로그 확인</li>
+        <li>Dispatch 버튼 또는 워크플로우 우클릭으로 수동 실행</li>
+        <li>Run 더블클릭 시 브라우저에서 GitHub 웹 페이지 열기</li>
+    </ul>
+
+    <h3>요구 사항</h3>
+    <ul>
+        <li>IntelliJ IDEA 2024.1 이상</li>
+        <li>Git, GitHub 플러그인 활성화 (기본 내장)</li>
+        <li>프로젝트에 Git remote 설정 필요</li>
+    </ul>
+    ]]></description>
+
+    <!-- 의존성: IntelliJ Platform 및 Git 플러그인 -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>Git4Idea</depends>
+    <depends>org.jetbrains.plugins.github</depends>
+
+    <!-- 확장 포인트 등록 -->
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Tool Window 등록 -->
+        <toolWindow id="GitHub Actions"
+                    secondary="false"
+                    icon="/icons/github-actions.svg"
+                    anchor="bottom"
+                    factoryClass="io.github.innoc99.gha.ui.GitHubActionsToolWindowFactory"/>
+
+        <!-- Settings 페이지 등록 -->
+        <projectConfigurable parentId="tools"
+                            instance="io.github.innoc99.gha.settings.GitHubActionsSettingsConfigurable"
+                            id="io.github.innoc99.gha.settings.GitHubActionsSettingsConfigurable"
+                            displayName="GitHub Actions Tool"/>
+
+        <!-- Application Service 등록 (글로벌 PAT 설정) -->
+        <applicationService serviceImplementation="io.github.innoc99.gha.settings.GitHubActionsGlobalSettings"/>
+
+        <!-- Project Service 등록 -->
+        <projectService serviceImplementation="io.github.innoc99.gha.settings.GitHubActionsSettings"/>
+        <projectService serviceImplementation="io.github.innoc99.gha.service.GitHubApiService"/>
+        <projectService serviceImplementation="io.github.innoc99.gha.service.WorkflowMonitorService"/>
+        <projectService serviceImplementation="io.github.innoc99.gha.service.ConnectionStateManager"/>
+    </extensions>
+
+    <!-- Actions 등록 -->
+    <actions>
+        <group id="GitHubActionsToolbar" text="GitHub Actions" popup="true">
+            <action id="GitHubActions.Refresh"
+                    class="io.github.innoc99.gha.action.RefreshWorkflowsAction"
+                    text="워크플로우 새로고침"
+                    description="GitHub Actions 워크플로우 목록을 새로고침합니다"
+                    icon="AllIcons.Actions.Refresh"/>
+
+            <action id="GitHubActions.RunWorkflow"
+                    class="io.github.innoc99.gha.action.RunWorkflowAction"
+                    text="워크플로우 실행"
+                    description="선택한 워크플로우를 실행합니다"
+                    icon="AllIcons.Actions.Execute"/>
+
+            <action id="GitHubActions.TestLocally"
+                    class="io.github.innoc99.gha.action.TestWorkflowLocallyAction"
+                    text="로컬 테스트"
+                    description="워크플로우를 로컬에서 테스트합니다"
+                    icon="AllIcons.Actions.StartDebugger"/>
+
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </group>
+    </actions>
+</idea-plugin>
