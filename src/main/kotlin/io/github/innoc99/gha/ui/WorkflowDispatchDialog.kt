@@ -9,6 +9,7 @@ import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.intellij.openapi.diagnostic.Logger
+import io.github.innoc99.gha.GhaBundle
 import io.github.innoc99.gha.model.DispatchInput
 import io.github.innoc99.gha.model.Workflow
 import io.github.innoc99.gha.model.WorkflowRun
@@ -44,9 +45,9 @@ class WorkflowDispatchDialog(
     private val inputComponents = mutableMapOf<String, JComponent>()
 
     init {
-        title = "Dispatch: ${workflow.name}"
-        setOKButtonText("실행")
-        setCancelButtonText("취소")
+        title = GhaBundle.message("dispatch.title", workflow.name)
+        setOKButtonText(GhaBundle.message("dispatch.ok"))
+        setCancelButtonText(GhaBundle.message("dispatch.cancel"))
         init()
     }
 
@@ -60,7 +61,7 @@ class WorkflowDispatchDialog(
 
         // 브랜치
         gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.0
-        panel.add(JLabel("브랜치 (ref):"), gbc)
+        panel.add(JLabel(GhaBundle.message("dispatch.branchLabel")), gbc)
         gbc.gridx = 1; gbc.weightx = 1.0
         panel.add(branchComboBox, gbc)
 
@@ -85,7 +86,7 @@ class WorkflowDispatchDialog(
         if (dispatchInputs.isEmpty()) {
             gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2
             gbc.insets = JBUI.insets(8, 4, 0, 4)
-            panel.add(JLabel("<html><small>workflow_dispatch 이벤트가 정의된 워크플로우만 실행 가능합니다.</small></html>"), gbc)
+            panel.add(JLabel(GhaBundle.message("dispatch.hint")), gbc)
         }
 
         val wrapper = JPanel(BorderLayout())
@@ -126,7 +127,7 @@ class WorkflowDispatchDialog(
     override fun doOKAction() {
         val ref = (branchComboBox.selectedItem as? String)?.trim() ?: ""
         if (ref.isEmpty()) {
-            Messages.showWarningDialog(project, "브랜치를 입력해주세요.", "입력 오류")
+            Messages.showWarningDialog(project, GhaBundle.message("dispatch.branchRequired"), GhaBundle.message("dispatch.inputError"))
             return
         }
 
@@ -137,8 +138,8 @@ class WorkflowDispatchDialog(
                 if (value.isBlank()) {
                     Messages.showWarningDialog(
                         project,
-                        "'${input.description.ifBlank { input.name }}'은(는) 필수 항목입니다.",
-                        "입력 오류"
+                        GhaBundle.message("dispatch.requiredField", input.description.ifBlank { input.name }),
+                        GhaBundle.message("dispatch.inputError")
                     )
                     return
                 }
@@ -150,9 +151,9 @@ class WorkflowDispatchDialog(
         val success = apiService.dispatchWorkflow(workflow.id, ref, inputs)
 
         if (success) {
-            Messages.showInfoMessage(project, "${workflow.name} 워크플로우를 $ref 브랜치에서 실행했습니다.", "Dispatch 성공")
+            Messages.showInfoMessage(project, GhaBundle.message("dispatch.success.message", workflow.name, ref), GhaBundle.message("dispatch.success.title"))
         } else {
-            Messages.showErrorDialog(project, "Dispatch 실행에 실패했습니다.\nworkflow_dispatch 이벤트가 정의되어 있는지 확인해주세요.", "Dispatch 실패")
+            Messages.showErrorDialog(project, GhaBundle.message("dispatch.failure.message"), GhaBundle.message("dispatch.failure.title"))
         }
 
         super.doOKAction()

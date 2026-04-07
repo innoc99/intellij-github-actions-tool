@@ -9,6 +9,7 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
+import io.github.innoc99.gha.GhaBundle
 import io.github.innoc99.gha.model.WorkflowJob
 import io.github.innoc99.gha.model.WorkflowRun
 import io.github.innoc99.gha.service.GitHubApiService
@@ -42,7 +43,7 @@ class WorkflowRunDetailPanel(
     private var currentRun: WorkflowRun? = null
 
     private val refreshButton = JButton(AllIcons.Actions.Refresh).apply {
-        toolTipText = "Jobs 새로고침"
+        toolTipText = GhaBundle.message("tooltip.refreshJobs")
         isBorderPainted = false
         isContentAreaFilled = false
         addActionListener {
@@ -59,7 +60,7 @@ class WorkflowRunDetailPanel(
     // 사일런트 갱신 중 선택 이벤트 무시 플래그
     private var suppressSelectionEvents = false
 
-    private val emptyLabel = JBLabel("워크플로우 실행을 선택하세요", SwingConstants.CENTER)
+    private val emptyLabel = JBLabel(GhaBundle.message("detail.emptyState"), SwingConstants.CENTER)
     private val cardLayout = java.awt.CardLayout()
     private val contentCard = JPanel(cardLayout)
 

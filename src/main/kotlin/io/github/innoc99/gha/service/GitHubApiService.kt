@@ -374,7 +374,12 @@ class GitHubApiService(private val project: Project) {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     logger.debug("API 요청 실패: ${response.code}")
-                    connectionState.recordFailure()
+                    if (response.code == 404) {
+                        // 404 = 서버는 응답함, Actions 미설정 등 리소스 없음
+                        connectionState.recordSuccess()
+                    } else {
+                        connectionState.recordFailure()
+                    }
                     return null
                 }
                 connectionState.recordSuccess()

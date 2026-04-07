@@ -11,6 +11,7 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.ListSpeedSearch
+import io.github.innoc99.gha.GhaBundle
 import io.github.innoc99.gha.model.Workflow
 import io.github.innoc99.gha.model.WorkflowJob
 import io.github.innoc99.gha.model.WorkflowRun
@@ -66,7 +67,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
 
     // Runs refresh 버튼 (필터 오른쪽)
     private val runsRefreshButton = JButton(AllIcons.Actions.Refresh).apply {
-        toolTipText = "Runs 새로고침"
+        toolTipText = GhaBundle.message("tooltip.refreshRuns")
         isBorderPainted = false
         isContentAreaFilled = false
         addActionListener {
@@ -77,7 +78,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
                         connectionState.recordSuccess()
                     } else {
                         ApplicationManager.getApplication().invokeLater {
-                            offlineBannerLabel.text = "오프라인 — 네트워크 연결을 확인해주세요"
+                            offlineBannerLabel.text = GhaBundle.message("banner.offline.checkNetwork")
                         }
                     }
                 }
@@ -114,6 +115,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
     companion object {
         private const val CARD_GUIDE = "guide"
         private const val CARD_MAIN = "main"
+        private const val CARD_NO_ACTIONS = "no_actions"
     }
 
     init {
@@ -137,6 +139,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
 
         add(topWrapper, BorderLayout.NORTH)
         contentPanel.add(createGuidePanel(), CARD_GUIDE)
+        contentPanel.add(createNoActionsPanel(), CARD_NO_ACTIONS)
         contentPanel.add(createMainPanel(), CARD_MAIN)
         add(contentPanel, BorderLayout.CENTER)
 
@@ -215,7 +218,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
                 val selected = runList.selectedValue ?: return
 
                 val popup = JPopupMenu()
-                val webItem = JMenuItem("웹으로 이동", AllIcons.General.Web)
+                val webItem = JMenuItem(GhaBundle.message("contextMenu.openWeb"), AllIcons.General.Web)
                 webItem.addActionListener { BrowserUtil.browse(selected.htmlUrl) }
                 popup.add(webItem)
                 popup.show(runList, e.x, e.y)
@@ -322,7 +325,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
         ApplicationManager.getApplication().executeOnPooledThread {
             val logs = apiService.fetchJobLogs(job.id)
             ApplicationManager.getApplication().invokeLater {
-                val logContent = logs ?: "로그를 불러올 수 없습니다."
+                val logContent = logs ?: GhaBundle.message("log.loadFailed")
                 logCache[job.id] = logContent
                 stepLogPanel.showJobLog(displayName, job.steps, logContent)
                 stepLogPanel.setRefreshing(false)
@@ -333,16 +336,16 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
     private fun createFilterPanel(): JPanel {
         val filterPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 4))
 
-        filterPanel.add(JLabel("상태:"))
-        statusFilter.addItem("전체")
+        filterPanel.add(JLabel(GhaBundle.message("filter.status")))
+        statusFilter.addItem(GhaBundle.message("filter.all"))
         statusFilter.addItem("success")
         statusFilter.addItem("failure")
         statusFilter.addItem("cancelled")
         statusFilter.addItem("in_progress")
         filterPanel.add(statusFilter)
 
-        filterPanel.add(JLabel("브랜치:"))
-        branchFilter.addItem("전체")
+        filterPanel.add(JLabel(GhaBundle.message("filter.branch")))
+        branchFilter.addItem(GhaBundle.message("filter.all"))
         filterPanel.add(branchFilter)
 
         // Dispatch 버튼
@@ -384,7 +387,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
 
     private fun createToolbar(): JPanel {
         val actionGroup = DefaultActionGroup().apply {
-            add(object : AnAction("새로고침", "워크플로우 목록을 새로고침합니다", AllIcons.Actions.Refresh) {
+            add(object : AnAction(GhaBundle.message("toolbar.refresh"), GhaBundle.message("toolbar.refresh.description"), AllIcons.Actions.Refresh) {
                 override fun actionPerformed(e: AnActionEvent) {
                     if (!connectionState.isOnline) {
                         ApplicationManager.getApplication().executeOnPooledThread {
@@ -393,7 +396,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
                                 connectionState.recordSuccess()
                             } else {
                                 ApplicationManager.getApplication().invokeLater {
-                                    offlineBannerLabel.text = "오프라인 — 네트워크 연결을 확인해주세요"
+                                    offlineBannerLabel.text = GhaBundle.message("banner.offline.checkNetwork")
                                 }
                             }
                         }
@@ -402,7 +405,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
                     }
                 }
             })
-            add(object : AnAction("설정", "GitHub Actions Tool 설정을 엽니다", AllIcons.General.Settings) {
+            add(object : AnAction(GhaBundle.message("toolbar.settings"), GhaBundle.message("toolbar.settings.description"), AllIcons.General.Settings) {
                 override fun actionPerformed(e: AnActionEvent) {
                     ShowSettingsUtil.getInstance().showSettingsDialog(
                         project, GitHubActionsSettingsConfigurable::class.java
@@ -434,12 +437,12 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
         panel.add(iconLabel, gbc)
 
         gbc.insets = Insets(10, 0, 5, 0)
-        val titleLabel = JLabel("GitHub Actions Tool 설정이 필요합니다")
+        val titleLabel = JLabel(GhaBundle.message("guide.title"))
         titleLabel.font = titleLabel.font.deriveFont(Font.BOLD, 14f)
         panel.add(titleLabel, gbc)
 
         gbc.insets = Insets(5, 0, 15, 0)
-        val descLabel = JLabel("<html><center>GitHub 인증이 필요합니다.<br>Version Control > GitHub에 계정을 등록하거나,<br>아래 설정에서 Personal Access Token을 입력해주세요.</center></html>")
+        val descLabel = JLabel(GhaBundle.message("guide.description"))
         descLabel.horizontalAlignment = SwingConstants.CENTER
         panel.add(descLabel, gbc)
 
@@ -458,6 +461,32 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
         return panel
     }
 
+    private fun createNoActionsPanel(): JPanel {
+        val panel = JPanel(GridBagLayout())
+        val gbc = GridBagConstraints().apply {
+            gridx = 0
+            gridy = GridBagConstraints.RELATIVE
+            anchor = GridBagConstraints.CENTER
+            fill = GridBagConstraints.NONE
+        }
+
+        val iconLabel = JLabel(AllIcons.General.Information)
+        iconLabel.horizontalAlignment = SwingConstants.CENTER
+        panel.add(iconLabel, gbc)
+
+        gbc.insets = Insets(10, 0, 5, 0)
+        val titleLabel = JLabel(GhaBundle.message("noActions.title"))
+        titleLabel.font = titleLabel.font.deriveFont(Font.BOLD, 14f)
+        panel.add(titleLabel, gbc)
+
+        gbc.insets = Insets(5, 0, 15, 0)
+        val descLabel = JLabel(GhaBundle.message("noActions.description"))
+        descLabel.horizontalAlignment = SwingConstants.CENTER
+        panel.add(descLabel, gbc)
+
+        return panel
+    }
+
     fun refreshView() {
         if (!isSettingsConfigured()) {
             cardLayout.show(contentPanel, CARD_GUIDE)
@@ -466,7 +495,6 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
             return
         }
 
-        cardLayout.show(contentPanel, CARD_MAIN)
         loadData()
         listRefreshTimer.restart()
         detailRefreshTimer.restart()
@@ -489,6 +517,14 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
                 val runs = apiService.fetchWorkflowRuns(limit = 50)
 
                 ApplicationManager.getApplication().invokeLater {
+                    if (workflows.isEmpty() && connectionState.isOnline) {
+                        // Actions 미설정 → 안내 카드 표시, 타이머 정지
+                        cardLayout.show(contentPanel, CARD_NO_ACTIONS)
+                        listRefreshTimer.stop()
+                        detailRefreshTimer.stop()
+                        return@invokeLater
+                    }
+                    cardLayout.show(contentPanel, CARD_MAIN)
                     treePanel.setWorkflows(workflows)
                     allRuns.clear()
                     allRuns.addAll(runs)
@@ -510,7 +546,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
     private fun updateBranchFilter() {
         val selectedBranch = branchFilter.selectedItem as? String
         branchFilter.removeAllItems()
-        branchFilter.addItem("전체")
+        branchFilter.addItem(GhaBundle.message("filter.all"))
         allRuns.map { it.headBranch }.distinct().sorted().forEach { branchFilter.addItem(it) }
         if (selectedBranch != null && branchFilter.getItemCount() > 0) {
             branchFilter.selectedItem = selectedBranch
@@ -519,19 +555,20 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
 
     private fun applyFilters() {
         val previouslySelectedRunId = runList.selectedValue?.id
-        val selectedStatus = statusFilter.selectedItem as? String ?: "전체"
-        val selectedBranch = branchFilter.selectedItem as? String ?: "전체"
+        val allLabel = GhaBundle.message("filter.all")
+        val selectedStatus = statusFilter.selectedItem as? String ?: allLabel
+        val selectedBranch = branchFilter.selectedItem as? String ?: allLabel
 
         val filtered = allRuns.filter { run ->
             val matchWorkflow = selectedWorkflow == null || run.workflowId == selectedWorkflow?.id
-            val matchStatus = selectedStatus == "전체" || when (selectedStatus) {
+            val matchStatus = selectedStatus == allLabel || when (selectedStatus) {
                 "success" -> run.conclusion == "success"
                 "failure" -> run.conclusion == "failure"
                 "cancelled" -> run.conclusion == "cancelled"
                 "in_progress" -> run.isInProgress()
                 else -> true
             }
-            val matchBranch = selectedBranch == "전체" || run.headBranch == selectedBranch
+            val matchBranch = selectedBranch == allLabel || run.headBranch == selectedBranch
             matchWorkflow && matchStatus && matchBranch
         }
 
@@ -571,7 +608,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
                 ApplicationManager.getApplication().invokeLater {
                     runsRefreshButton.icon = AllIcons.Actions.Refresh
                     if (!connectionState.isOnline) {
-                        offlineBannerLabel.text = "오프라인 — 네트워크 연결을 확인해주세요"
+                        offlineBannerLabel.text = GhaBundle.message("banner.offline.checkNetwork")
                     }
                 }
             }
@@ -598,7 +635,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
         val timeText = connectionState.lastSuccessTime?.let {
             it.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm:ss"))
         } ?: "-"
-        offlineBannerLabel.text = "오프라인 — 마지막 갱신: $timeText"
+        offlineBannerLabel.text = GhaBundle.message("banner.offline.lastUpdate", timeText)
         offlineBanner.isVisible = true
         offlineBanner.parent?.revalidate()
     }

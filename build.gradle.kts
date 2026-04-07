@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "io.github.innoc99"
-version = "1.1.0"
+version = "1.1.1"
 
 repositories {
     mavenCentral()

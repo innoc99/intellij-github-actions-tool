@@ -7,6 +7,7 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
+import io.github.innoc99.gha.GhaBundle
 import io.github.innoc99.gha.service.LocalWorkflowTestService
 import java.awt.BorderLayout
 import java.awt.Dimension
@@ -31,7 +32,7 @@ class LocalTestDialog(private val project: Project) : DialogWrapper(project) {
     private val testService = LocalWorkflowTestService.getInstance(project)
 
     init {
-        title = "로컬 워크플로우 테스트"
+        title = GhaBundle.message("localTest.title")
         init()
     }
 
@@ -48,7 +49,7 @@ class LocalTestDialog(private val project: Project) : DialogWrapper(project) {
         gbc.gridx = 0
         gbc.gridy = 0
         gbc.weightx = 0.0
-        configPanel.add(JBLabel("워크플로우 파일:"), gbc)
+        configPanel.add(JBLabel(GhaBundle.message("localTest.workflowFile")), gbc)
 
         gbc.gridx = 1
         gbc.weightx = 1.0
@@ -57,7 +58,7 @@ class LocalTestDialog(private val project: Project) : DialogWrapper(project) {
         gbc.gridx = 0
         gbc.gridy = 1
         gbc.weightx = 0.0
-        configPanel.add(JBLabel("이벤트:"), gbc)
+        configPanel.add(JBLabel(GhaBundle.message("localTest.event")), gbc)
 
         gbc.gridx = 1
         gbc.weightx = 1.0
@@ -66,7 +67,7 @@ class LocalTestDialog(private val project: Project) : DialogWrapper(project) {
         gbc.gridx = 0
         gbc.gridy = 2
         gbc.gridwidth = 2
-        val testButton = JButton("테스트 실행").apply {
+        val testButton = JButton(GhaBundle.message("localTest.run")).apply {
             addActionListener { runTest() }
         }
         configPanel.add(testButton, gbc)

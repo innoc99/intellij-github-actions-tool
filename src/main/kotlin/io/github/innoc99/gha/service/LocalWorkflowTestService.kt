@@ -8,6 +8,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
+import io.github.innoc99.gha.GhaBundle
 import java.io.File
 
 /**
@@ -45,7 +46,7 @@ class LocalWorkflowTestService(private val project: Project) {
         outputHandler: (String) -> Unit
     ) {
         if (!isActInstalled()) {
-            outputHandler("❌ act가 설치되어 있지 않습니다. https://github.com/nektos/act 에서 설치하세요.")
+            outputHandler(GhaBundle.message("localTest.actNotInstalled"))
             return
         }
 
@@ -53,12 +54,12 @@ class LocalWorkflowTestService(private val project: Project) {
         val workflowPath = File(projectPath, workflowFile)
 
         if (!workflowPath.exists()) {
-            outputHandler("❌ 워크플로우 파일을 찾을 수 없습니다: $workflowFile")
+            outputHandler(GhaBundle.message("localTest.fileNotFound", workflowFile))
             return
         }
 
-        outputHandler("🚀 로컬 워크플로우 테스트 시작: $workflowFile")
-        outputHandler("이벤트: $event")
+        outputHandler(GhaBundle.message("localTest.starting", workflowFile))
+        outputHandler(GhaBundle.message("localTest.eventInfo", event))
         outputHandler("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         try {
@@ -82,10 +83,10 @@ class LocalWorkflowTestService(private val project: Project) {
                     val exitCode = event.exitCode
                     if (exitCode == 0) {
                         outputHandler("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                        outputHandler("✅ 워크플로우 테스트 성공")
+                        outputHandler(GhaBundle.message("localTest.success"))
                     } else {
                         outputHandler("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                        outputHandler("❌ 워크플로우 테스트 실패 (exit code: $exitCode)")
+                        outputHandler(GhaBundle.message("localTest.failure", exitCode))
                     }
                 }
             })
@@ -94,7 +95,7 @@ class LocalWorkflowTestService(private val project: Project) {
 
         } catch (e: Exception) {
             logger.error("워크플로우 테스트 실패", e)
-            outputHandler("❌ 오류: ${e.message}")
+            outputHandler(GhaBundle.message("localTest.error", e.message ?: ""))
         }
     }
 
@@ -102,20 +103,7 @@ class LocalWorkflowTestService(private val project: Project) {
      * act 설치 가이드 출력
      */
     fun getInstallGuide(): String {
-        return """
-            |act 설치 방법:
-            |
-            |macOS (Homebrew):
-            |  brew install act
-            |
-            |Linux:
-            |  curl https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash
-            |
-            |Windows (Chocolatey):
-            |  choco install act-cli
-            |
-            |자세한 정보: https://github.com/nektos/act
-        """.trimMargin()
+        return GhaBundle.message("localTest.installGuide")
     }
 
     companion object {

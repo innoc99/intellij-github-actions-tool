@@ -7,6 +7,7 @@ import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
+import io.github.innoc99.gha.GhaBundle
 import io.github.innoc99.gha.model.WorkflowStep
 import java.awt.*
 import java.awt.event.MouseAdapter
@@ -39,14 +40,14 @@ class StepLogPanel : JPanel(BorderLayout()) {
         border = JBUI.Borders.empty(8, 12, 4, 12)
     }
     private val searchField = SearchTextField(false).apply {
-        textEditor.emptyText.text = "로그 검색..."
+        textEditor.emptyText.text = GhaBundle.message("log.search.placeholder")
     }
 
     /** 로그 refresh 요청 콜백 */
     var onRefreshRequested: (() -> Unit)? = null
 
     private val refreshButton = JButton(AllIcons.Actions.Refresh).apply {
-        toolTipText = "로그 새로고침"
+        toolTipText = GhaBundle.message("log.refresh.tooltip")
         isBorderPainted = false
         isContentAreaFilled = false
         isVisible = false
@@ -133,7 +134,7 @@ class StepLogPanel : JPanel(BorderLayout()) {
         setRefreshing(true)
 
         contentPanel.removeAll()
-        contentPanel.add(JBLabel("로그 로딩 중...").apply {
+        contentPanel.add(JBLabel(GhaBundle.message("log.loading")).apply {
             border = JBUI.Borders.empty(16)
         })
         contentPanel.revalidate()

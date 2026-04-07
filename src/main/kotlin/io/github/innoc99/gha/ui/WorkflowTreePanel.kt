@@ -6,6 +6,7 @@ import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
+import io.github.innoc99.gha.GhaBundle
 import io.github.innoc99.gha.model.Workflow
 import java.awt.BorderLayout
 import java.awt.Component
@@ -47,7 +48,7 @@ class WorkflowTreePanel : JPanel(BorderLayout()) {
 
     private fun setupUI() {
         // 상단 필터 텍스트박스
-        filterField.textEditor.emptyText.text = "워크플로우 검색..."
+        filterField.textEditor.emptyText.text = GhaBundle.message("tree.filter.placeholder")
         filterField.addDocumentListener(object : com.intellij.ui.DocumentAdapter() {
             override fun textChanged(e: javax.swing.event.DocumentEvent) {
                 applyFilter()
@@ -87,13 +88,13 @@ class WorkflowTreePanel : JPanel(BorderLayout()) {
                 val workflow = node.userObject as? Workflow ?: return
 
                 val popup = JPopupMenu()
-                val dispatchItem = JMenuItem("Dispatch 실행", AllIcons.Actions.Execute)
+                val dispatchItem = JMenuItem(GhaBundle.message("contextMenu.dispatch"), AllIcons.Actions.Execute)
                 dispatchItem.addActionListener { onDispatchRequested?.invoke(workflow) }
                 popup.add(dispatchItem)
 
                 val webUrl = getWorkflowWebUrl?.invoke(workflow)
                 if (webUrl != null) {
-                    val webItem = JMenuItem("웹으로 이동", AllIcons.General.Web)
+                    val webItem = JMenuItem(GhaBundle.message("contextMenu.openWeb"), AllIcons.General.Web)
                     webItem.addActionListener { BrowserUtil.browse(webUrl) }
                     popup.add(webItem)
                 }
@@ -173,7 +174,7 @@ class WorkflowTreePanel : JPanel(BorderLayout()) {
 
             when (val obj = node.userObject) {
                 ALL_HISTORY_MARKER -> {
-                    text = "전체 히스토리"
+                    text = GhaBundle.message("tree.allHistory")
                     icon = AllIcons.Vcs.History
                 }
                 is Workflow -> {

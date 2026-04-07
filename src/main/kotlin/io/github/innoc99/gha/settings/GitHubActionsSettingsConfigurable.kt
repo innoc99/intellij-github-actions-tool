@@ -7,6 +7,7 @@ import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.*
+import io.github.innoc99.gha.GhaBundle
 import io.github.innoc99.gha.service.GitRemoteDetector
 import io.github.innoc99.gha.service.GitRemoteInfo
 import java.awt.Cursor
@@ -31,33 +32,33 @@ class GitHubActionsSettingsConfigurable(private val project: Project) : Configur
     private val settings = GitHubActionsSettings.getInstance(project)
     private val globalSettings = GitHubActionsGlobalSettings.getInstance()
 
-    override fun getDisplayName(): String = "GitHub Actions Tool"
+    override fun getDisplayName(): String = GhaBundle.message("settings.displayName")
 
     override fun createComponent(): JComponent {
         val vcsInfo = GitRemoteDetector.detect(project)
 
         val component = panel {
-            group("VCS 저장소 정보") {
+            group(GhaBundle.message("settings.vcs.group")) {
                 row {
                     vcsInfoLabel = label(formatVcsInfo(vcsInfo)).component
                 }
                 if (vcsInfo == null) {
                     row {
-                        comment("Git remote를 감지할 수 없습니다. 프로젝트에 Git 저장소가 설정되어 있는지 확인하세요.")
+                        comment(GhaBundle.message("settings.vcs.notDetected"))
                     }
                 }
             }
 
-            group("인증 설정 (글로벌)") {
+            group(GhaBundle.message("settings.auth.group")) {
                 row {
-                    useGitHubAccountCheckBox = checkBox("IntelliJ GitHub 계정 설정 사용")
+                    useGitHubAccountCheckBox = checkBox(GhaBundle.message("settings.auth.useGitHubAccount"))
                         .bindSelected(globalSettings.state::useGitHubAccountSettings)
                         .component
                     useGitHubAccountCheckBox.addActionListener { updateAuthUI() }
-                }.rowComment("Version Control > GitHub에 등록된 계정의 토큰을 사용합니다")
+                }.rowComment(GhaBundle.message("settings.auth.useGitHubAccount.comment"))
 
                 row {
-                    githubSettingsLink = JLabel("<html><a href=''>GitHub 설정 열기 (Version Control > GitHub)</a></html>")
+                    githubSettingsLink = JLabel("<html><a href=\"\">${GhaBundle.message("settings.auth.openGitHub")}</a></html>")
                     githubSettingsLink.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                     githubSettingsLink.addMouseListener(object : MouseAdapter() {
                         override fun mouseClicked(e: MouseEvent?) {
@@ -77,17 +78,17 @@ class GitHubActionsSettingsConfigurable(private val project: Project) : Configur
                             getter = { globalSettings.state.personalAccessToken },
                             setter = { globalSettings.state.personalAccessToken = it }
                         )
-                }.rowComment("repo, workflow 권한이 있는 토큰 (모든 프로젝트에서 공유)")
+                }.rowComment(GhaBundle.message("settings.auth.tokenComment"))
             }
 
-            group("모니터링 설정") {
+            group(GhaBundle.message("settings.monitor.group")) {
                 row {
-                    autoRefreshCheckBox = checkBox("자동 새로고침 활성화")
+                    autoRefreshCheckBox = checkBox(GhaBundle.message("settings.monitor.autoRefresh"))
                         .bindSelected(settings.state::autoRefreshEnabled)
                         .component
                 }
 
-                row("새로고침 주기 (초):") {
+                row(GhaBundle.message("settings.monitor.refreshInterval")) {
                     refreshIntervalField = textField()
                         .bindText(
                             getter = { settings.state.refreshIntervalSeconds.toString() },
@@ -95,7 +96,7 @@ class GitHubActionsSettingsConfigurable(private val project: Project) : Configur
                         )
                         .columns(COLUMNS_SHORT)
                         .component
-                }.rowComment("최소 10초")
+                }.rowComment(GhaBundle.message("settings.monitor.minInterval"))
             }
         }
         updateAuthUI()
@@ -103,7 +104,7 @@ class GitHubActionsSettingsConfigurable(private val project: Project) : Configur
     }
 
     private fun formatVcsInfo(info: GitRemoteInfo?): String {
-        if (info == null) return "감지된 저장소 없음"
+        if (info == null) return GhaBundle.message("settings.vcs.noRepository")
         return "${info.baseUrl} / ${info.owner} / ${info.repository}"
     }
 

@@ -4,6 +4,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
+import io.github.innoc99.gha.GhaBundle
 import io.github.innoc99.gha.service.GitHubApiService
 import java.awt.Dimension
 import javax.swing.JComponent
@@ -23,7 +24,7 @@ class LogViewerDialog(
     }
 
     init {
-        title = "Job 로그: $jobName"
+        title = GhaBundle.message("logViewer.title", jobName)
         init()
         loadLogs()
     }
@@ -41,7 +42,7 @@ class LogViewerDialog(
         if (logs != null) {
             logTextArea.text = logs
         } else {
-            logTextArea.text = "로그를 불러올 수 없습니다."
+            logTextArea.text = GhaBundle.message("log.loadFailed")
         }
     }
 }
