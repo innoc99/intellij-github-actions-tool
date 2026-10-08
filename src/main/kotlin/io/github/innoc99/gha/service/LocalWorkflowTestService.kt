@@ -2,7 +2,7 @@ package io.github.innoc99.gha.service
 
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.OSProcessHandler
-import com.intellij.execution.process.ProcessAdapter
+import com.intellij.execution.process.ProcessListener
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
@@ -74,7 +74,7 @@ class LocalWorkflowTestService(private val project: Project) {
 
             val processHandler = OSProcessHandler(commandLine)
 
-            processHandler.addProcessListener(object : ProcessAdapter() {
+            processHandler.addProcessListener(object : ProcessListener {
                 override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
                     outputHandler(event.text)
                 }

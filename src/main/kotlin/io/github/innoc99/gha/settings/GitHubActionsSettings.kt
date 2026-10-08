@@ -17,9 +17,6 @@ class GitHubActionsSettings : PersistentStateComponent<GitHubActionsSettings.Sta
     private var myState = State()
 
     data class State(
-        var githubEnterpriseUrl: String = "",
-        var repositoryOwner: String = "",
-        var repositoryName: String = "",
         var autoRefreshEnabled: Boolean = true,
         var refreshIntervalSeconds: Int = 30
     )

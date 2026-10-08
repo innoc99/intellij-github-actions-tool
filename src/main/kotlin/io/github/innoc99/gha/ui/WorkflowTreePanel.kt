@@ -1,6 +1,8 @@
 package io.github.innoc99.gha.ui
 
 import com.intellij.icons.AllIcons
+import com.intellij.ui.ColoredTreeCellRenderer
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ide.BrowserUtil
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBScrollPane
@@ -27,6 +29,9 @@ class WorkflowTreePanel : JPanel(BorderLayout()) {
     /** Dispatch 요청 콜백 */
     var onDispatchRequested: ((Workflow) -> Unit)? = null
 
+    /** 워크플로우 옆에 표시할 요약 (마지막 성공 배포 버전·시각) */
+    var workflowSummary: ((Workflow) -> String?)? = null
+
     /** 워크플로우 웹 URL 생성 콜백 */
     var getWorkflowWebUrl: ((Workflow) -> String?)? = null
 
@@ -37,6 +42,9 @@ class WorkflowTreePanel : JPanel(BorderLayout()) {
 
     private val filterField = SearchTextField(false)
     private var workflows: List<Workflow> = emptyList()
+
+    /** 마지막으로 알린 선택 (워크플로우 id 또는 전체 히스토리 마커) */
+    private var lastSelectionKey: Any? = null
 
     companion object {
         const val ALL_HISTORY_MARKER = "__ALL_HISTORY__"
@@ -68,11 +76,17 @@ class WorkflowTreePanel : JPanel(BorderLayout()) {
 
         // 선택 이벤트
         tree.addTreeSelectionListener { e ->
+            // reload로 선택이 풀렸다가 같은 항목으로 복원되는 경우는 알리지 않음 (상세·로그가 매번 지워지던 문제)
+            if (!e.isAddedPath) return@addTreeSelectionListener
             val node = e.path?.lastPathComponent as? DefaultMutableTreeNode ?: return@addTreeSelectionListener
-            when (val obj = node.userObject) {
-                ALL_HISTORY_MARKER -> onWorkflowSelected?.invoke(null)
-                is Workflow -> onWorkflowSelected?.invoke(obj)
+            val key = when (val obj = node.userObject) {
+                ALL_HISTORY_MARKER -> ALL_HISTORY_MARKER
+                is Workflow -> obj.id
+                else -> return@addTreeSelectionListener
             }
+            if (key == lastSelectionKey) return@addTreeSelectionListener
+            lastSelectionKey = key
+            onWorkflowSelected?.invoke(node.userObject as? Workflow)
         }
 
         // 우클릭 컨텍스트 메뉴
@@ -146,11 +160,13 @@ class WorkflowTreePanel : JPanel(BorderLayout()) {
         workflows = newWorkflows
         applyFilter()
 
-        // 필터가 비어있으면 전체 히스토리 선택
-        if (filterField.text.isBlank()) {
+        // 이전 선택을 복원하지 못했고 필터가 비어있으면 전체 히스토리 선택
+        if (tree.selectionPath == null && filterField.text.isBlank()) {
             tree.selectionPath = TreePath(arrayOf(rootNode, allHistoryNode))
         }
     }
+
+    fun findWorkflow(id: Long): Workflow? = workflows.firstOrNull { it.id == id }
 
     /**
      * 현재 선택된 워크플로우 반환 (전체 히스토리면 null)
@@ -161,30 +177,26 @@ class WorkflowTreePanel : JPanel(BorderLayout()) {
     }
 
     /**
-     * 트리 셀 렌더러
+     * 트리 셀 렌더러 — 워크플로우 이름 + 마지막 성공 요약(회색)
      */
-    private class WorkflowTreeCellRenderer : DefaultTreeCellRenderer() {
-        override fun getTreeCellRendererComponent(
+    private inner class WorkflowTreeCellRenderer : ColoredTreeCellRenderer() {
+        override fun customizeCellRenderer(
             tree: JTree, value: Any?, selected: Boolean,
             expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean
-        ): Component {
-            super.getTreeCellRendererComponent(tree, value, selected, expanded, leaf, row, hasFocus)
-            backgroundNonSelectionColor = tree.background
-            val node = value as? DefaultMutableTreeNode ?: return this
-
+        ) {
+            val node = value as? DefaultMutableTreeNode ?: return
             when (val obj = node.userObject) {
                 ALL_HISTORY_MARKER -> {
-                    text = GhaBundle.message("tree.allHistory")
+                    append(GhaBundle.message("tree.allHistory"))
                     icon = AllIcons.Vcs.History
                 }
                 is Workflow -> {
-                    text = obj.name
+                    append(obj.name)
+                    workflowSummary?.invoke(obj)?.let { append("  $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
                     icon = AllIcons.Actions.Execute
                 }
             }
-
             border = JBUI.Borders.empty(2, 0)
-            return this
         }
     }
 }

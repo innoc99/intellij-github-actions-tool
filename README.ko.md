@@ -27,7 +27,10 @@ GitHub Actions 워크플로우의 모니터링, 로그 조회, 수동 실행(Dis
 | **워크플로우 모니터링** | 전체 워크플로우 목록 및 실행(Run) 상태를 실시간 자동 갱신 |
 | **워크플로우 수동 실행** | `workflow_dispatch` 이벤트를 지원하는 워크플로우를 IDE에서 직접 Dispatch |
 | **Jobs/Steps 상세 조회** | Run별 Job 트리와 Step 단위 로그를 표시 |
-| **로그 검색** | Step 로그 내 키워드 검색, 매칭 라인 자동 하이라이트 및 펼침 |
+| **다시 실행 / 취소** | Run 우클릭으로 전체 Job 다시 실행, 실패한 Job만 다시 실행, 실행 취소 |
+| **실패 원인 요약** | Job annotations(error/warning)를 로그 위에 표시 |
+| **로그 뷰어** | Editor 기반 로그 — Step·그룹 접기, error 줄 강조, 검색 |
+| **배포 버전과 재배포** | Run에 버전 태그(`name-vYYYY.MM.DD.HHmm`) 표시, 워크플로우별 마지막 성공 Run 표시, `redeploy_tag` 입력으로 선택한 버전 재배포 |
 | **상태/브랜치 필터** | 실행 결과(success, failure 등)와 브랜치별 필터링 |
 | **Quick Search** | Run 목록에서 타이핑 즉시 이름 검색 (Speed Search) |
 | **VCS 자동 감지** | Git remote에서 GitHub 서버/Owner/Repository를 자동 감지 |
@@ -38,7 +41,7 @@ GitHub Actions 워크플로우의 모니터링, 로그 조회, 수동 실행(Dis
 
 ## 요구 사항
 
-- **IntelliJ IDEA** 2024.1 ~ 2026.1 (Community / Ultimate)
+- **IntelliJ IDEA** 2024.1 ~ 2026.2 (Community / Ultimate)
 - **Git** 플러그인 활성화 (기본 내장)
 - **GitHub** 플러그인 활성화 (기본 내장)
 - 프로젝트에 **Git remote**가 설정되어 있어야 함 (GitHub 또는 GitHub Enterprise)
@@ -51,7 +54,7 @@ GitHub Actions 워크플로우의 모니터링, 로그 조회, 수동 실행(Dis
 
 아래 링크에서 최신 플러그인 zip 파일을 다운로드합니다:
 
-> **[intellij-github-actions-tool-1.1.0.zip](dist/intellij-github-actions-tool-1.1.0.zip)**
+> **[intellij-github-actions-tool-1.2.0.zip](dist/intellij-github-actions-tool-1.2.0.zip)**
 
 또는 저장소의 `dist/` 폴더에서 직접 다운로드할 수 있습니다.
 
@@ -62,7 +65,7 @@ GitHub Actions 워크플로우의 모니터링, 로그 조회, 수동 실행(Dis
 3. 좌측 메뉴에서 **Plugins** 를 선택합니다.
 4. 상단의 **톱니바퀴(⚙) 아이콘** 을 클릭합니다.
 5. **Install Plugin from Disk...** 를 선택합니다.
-6. 다운로드한 `intellij-github-actions-tool-1.1.0.zip` 파일을 선택합니다.
+6. 다운로드한 `intellij-github-actions-tool-1.2.0.zip` 파일을 선택합니다.
 7. **OK** 를 클릭하면 설치가 완료됩니다.
 8. **Restart IDE** 버튼을 클릭하여 IntelliJ를 재시작합니다.
 
@@ -126,13 +129,13 @@ Git remote에서 자동 감지된 GitHub 서버 URL, Owner, Repository 정보가
 | 항목 | 설명 | 기본값 |
 |------|------|--------|
 | IntelliJ GitHub 계정 설정 사용 | 체크 시 IntelliJ에 등록된 GitHub 계정 토큰 사용 | 활성화 |
-| Personal Access Token | 체크 해제 시 직접 토큰 입력 (모든 프로젝트에서 공유) | - |
+| Personal Access Token | 체크 해제 시 직접 토큰 입력 (모든 프로젝트에서 공유, IDE 비밀번호 저장소에 보관) | - |
 
 ### 모니터링 설정
 
 | 항목 | 설명 | 기본값 |
 |------|------|--------|
-| 자동 새로고침 활성화 | 워크플로우 실행 목록 자동 갱신 | 활성화 |
+| 자동 새로고침 활성화 | 워크플로우 실행 목록 자동 갱신 (IDE 비활성·Tool Window 숨김 시 일시 정지) | 활성화 |
 | 새로고침 주기 (초) | 자동 갱신 간격 (최소 10초) | 30초 |
 
 ---
@@ -184,8 +187,9 @@ Tool Window는 최대 4개 영역으로 구성됩니다:
 ### 로그 검색
 
 **④ Step 로그 패널** 상단의 **"로그 검색..."** 필드에 키워드를 입력합니다:
-- 매칭되는 라인이 **노란색 하이라이트**로 표시됩니다.
-- 매칭 라인이 포함된 Step과 Group이 **자동으로 펼쳐집니다**.
+- 매칭 위치가 **하이라이트**되고, 매칭이 포함된 접힌 Step·그룹이 **자동으로 펼쳐집니다**.
+- **Enter** / **Shift+Enter**로 다음 / 이전 결과로 이동합니다.
+- 실패한 Step은 처음부터 펼쳐져 있고, 첫 error 줄로 스크롤됩니다.
 
 ---
 
@@ -196,16 +200,16 @@ Tool Window는 최대 4개 영역으로 구성됩니다:
 | Run 목록에서 **타이핑** | Quick Search (Speed Search) |
 | Run **클릭** | Jobs 상세 트리 로드 |
 | Run **더블클릭** | 브라우저에서 열기 |
-| Run **우클릭** | 컨텍스트 메뉴 (웹으로 이동) |
+| Run **우클릭** | 컨텍스트 메뉴 (웹으로 이동, 다시 실행, 실패한 Job만 다시 실행, 이 버전으로 재배포, 실행 취소) |
 | 워크플로우 **우클릭** | 컨텍스트 메뉴 (Dispatch 실행, 웹으로 이동) |
 | Job **클릭** | Step 로그 패널 표시 |
-| Step 헤더 **클릭** | 로그 접기/펼치기 토글 |
+| Step·그룹 접기 표시 **클릭** | 로그 접기/펼치기 토글 |
 
 ---
 
 ## 기술 스택
 
-- **Kotlin** + IntelliJ Platform SDK 2024.1+
+- **Kotlin** + IntelliJ Platform SDK 2024.1+ (IntelliJ Platform Gradle Plugin 2.x)
 - **OkHttp** — HTTP 클라이언트
 - **Gson** — JSON 파싱
 - **SnakeYAML** — 워크플로우 YAML 파싱

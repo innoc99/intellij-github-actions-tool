@@ -10,6 +10,7 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
 import io.github.innoc99.gha.GhaBundle
+import io.github.innoc99.gha.model.isActiveStatus
 import io.github.innoc99.gha.model.WorkflowJob
 import io.github.innoc99.gha.model.WorkflowRun
 import io.github.innoc99.gha.service.GitHubApiService
@@ -54,11 +55,17 @@ class WorkflowRunDetailPanel(
     /** Job(leaf 노드) 선택 시 콜백 (WorkflowJob) */
     var onJobSelected: ((WorkflowJob) -> Unit)? = null
 
+    /** 자동 갱신으로 선택 중인 Job 정보가 바뀌었을 때 콜백 (선택 이벤트는 억제됨) */
+    var onJobUpdated: ((WorkflowJob) -> Unit)? = null
+
     /** Job 선택 해제 시 콜백 */
     var onJobDeselected: (() -> Unit)? = null
 
     // 사일런트 갱신 중 선택 이벤트 무시 플래그
     private var suppressSelectionEvents = false
+
+    // 갱신 요청 진행 중 여부 (EDT 전용) — 응답 지연 시 5초 타이머 요청이 쌓이는 것 방지
+    private var refreshInFlight = false
 
     private val emptyLabel = JBLabel(GhaBundle.message("detail.emptyState"), SwingConstants.CENTER)
     private val cardLayout = java.awt.CardLayout()
@@ -75,7 +82,7 @@ class WorkflowRunDetailPanel(
         val status: String
             get() = when {
                 jobs.any { it.conclusion == "failure" } -> "failure"
-                jobs.any { it.status == "in_progress" || it.status == "queued" } -> "in_progress"
+                jobs.any { isActiveStatus(it.status) } -> "in_progress"
                 jobs.all { it.conclusion == "success" } -> "success"
                 jobs.any { it.conclusion == "cancelled" } -> "cancelled"
                 jobs.any { it.conclusion == "skipped" } -> "skipped"
@@ -208,11 +215,13 @@ class WorkflowRunDetailPanel(
         // 백그라운드에서 Jobs 로딩
         setRefreshing(true)
         ApplicationManager.getApplication().executeOnPooledThread {
-            val jobs = apiService.fetchWorkflowJobs(run.id)
-            ApplicationManager.getApplication().invokeLater {
+            val jobs = apiService.fetchWorkflowJobs(run.id, userAction = true) ?: emptyList()
+            ApplicationManager.getApplication().invokeLater({
+                // 그사이 다른 Run을 선택했으면 늦게 온 응답은 버림
+                if (currentRun?.id != run.id) return@invokeLater
                 buildJobTree(jobs)
                 setRefreshing(false)
-            }
+            }, project.disposed)
         }
     }
 
@@ -224,14 +233,23 @@ class WorkflowRunDetailPanel(
      * 진행 중인 런의 Jobs를 사일런트 갱신 (선택/펼침 상태 보존)
      */
     fun refreshJobs(run: WorkflowRun) {
+        if (refreshInFlight) return
+        refreshInFlight = true
         // 현재 선택된 노드 정보 저장
         val selectedNode = jobsTree.lastSelectedPathComponent as? DefaultMutableTreeNode
         val selectedJobId = (selectedNode?.userObject as? WorkflowJob)?.id
 
         setRefreshing(true)
         ApplicationManager.getApplication().executeOnPooledThread {
-            val jobs = apiService.fetchWorkflowJobs(run.id)
-            ApplicationManager.getApplication().invokeLater {
+            // 예외·Error가 나도 플래그가 풀리도록 결과와 무관하게 EDT 복귀
+            val jobs = runCatching { apiService.fetchWorkflowJobs(run.id) }.getOrNull()
+            ApplicationManager.getApplication().invokeLater({
+                refreshInFlight = false
+                // 실패했거나 그사이 다른 Run을 선택했으면 기존 트리 유지
+                if (jobs == null || currentRun?.id != run.id) {
+                    setRefreshing(false)
+                    return@invokeLater
+                }
                 suppressSelectionEvents = true
                 try {
                     // 펼침 상태 저장
@@ -247,15 +265,16 @@ class WorkflowRunDetailPanel(
                         if (i in expandedRows) jobsTree.expandRow(i)
                     }
 
-                    // 선택 상태 복원
+                    // 선택 상태 복원 + 갱신된 Job(새로 시작된 Step 시각 등)을 로그 패널에 전달
                     if (selectedJobId != null) {
                         restoreJobSelection(selectedJobId)
+                        jobs.firstOrNull { it.id == selectedJobId }?.let { onJobUpdated?.invoke(it) }
                     }
                 } finally {
                     suppressSelectionEvents = false
                     setRefreshing(false)
                 }
-            }
+            }, project.disposed)
         }
     }
 
@@ -359,7 +378,7 @@ class WorkflowRunDetailPanel(
 
         private fun getStatusIcon(status: String, conclusion: String?): Icon {
             return when {
-                status == "in_progress" || status == "queued" -> AllIcons.Actions.Execute
+                isActiveStatus(status) -> AllIcons.Actions.Execute
                 conclusion == "success" -> AllIcons.RunConfigurations.TestPassed
                 conclusion == "failure" -> AllIcons.RunConfigurations.TestFailed
                 conclusion == "cancelled" || conclusion == "skipped" -> AllIcons.RunConfigurations.TestSkipped

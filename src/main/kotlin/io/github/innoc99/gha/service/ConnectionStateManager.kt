@@ -1,9 +1,11 @@
 package io.github.innoc99.gha.service
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import java.time.Instant
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -17,19 +19,22 @@ interface ConnectionStateListener {
 /**
  * 네트워크 연결 상태 머신
  * ONLINE/OFFLINE 상태를 관리하고, 상태 전환 시 리스너에게 알림
+ * 여러 pooled thread에서 동시에 호출되므로 상태 변경 메서드는 동기화한다.
  */
 @Service(Service.Level.PROJECT)
-class ConnectionStateManager(private val project: Project?) {
+class ConnectionStateManager(private val project: Project?) : Disposable {
 
     private val logger by lazy { Logger.getInstance(ConnectionStateManager::class.java) }
-    private val listeners = mutableListOf<ConnectionStateListener>()
+    private val listeners = CopyOnWriteArrayList<ConnectionStateListener>()
 
+    @Volatile
     var state: ConnectionState = ConnectionState.ONLINE
         private set
 
     val isOnline: Boolean get() = state == ConnectionState.ONLINE
 
     /** 마지막 API 성공 시각 */
+    @Volatile
     var lastSuccessTime: Instant? = null
         private set
 
@@ -59,6 +64,7 @@ class ConnectionStateManager(private val project: Project?) {
     /**
      * API 호출 성공 기록
      */
+    @Synchronized
     fun recordSuccess() {
         consecutiveFailures = 0
         lastSuccessTime = Instant.now()
@@ -75,6 +81,7 @@ class ConnectionStateManager(private val project: Project?) {
     /**
      * API 호출 실패 기록
      */
+    @Synchronized
     fun recordFailure() {
         consecutiveFailures++
 
@@ -89,12 +96,14 @@ class ConnectionStateManager(private val project: Project?) {
     /**
      * 다음 health-check 백오프 간격 반환 (호출할 때마다 단계 증가)
      */
+    @Synchronized
     fun nextBackoffMillis(): Long {
         val interval = backoffIntervalsMs[backoffStep.coerceAtMost(backoffIntervalsMs.size - 1)]
         if (backoffStep < backoffIntervalsMs.size - 1) backoffStep++
         return interval
     }
 
+    @Synchronized
     fun resetBackoff() {
         backoffStep = 0
     }
@@ -115,7 +124,9 @@ class ConnectionStateManager(private val project: Project?) {
         scheduleNextHealthCheck()
     }
 
+    @Synchronized
     private fun scheduleNextHealthCheck() {
+        if (healthCheckExecutor.isShutdown) return
         val delayMs = nextBackoffMillis()
         if (project != null) logger.info("다음 health-check: ${delayMs / 1000}초 후")
         healthCheckTask = healthCheckExecutor.schedule({
@@ -137,9 +148,10 @@ class ConnectionStateManager(private val project: Project?) {
         healthCheckTask = null
     }
 
-    fun dispose() {
+    /** 프로젝트 종료 시 플랫폼이 호출 — health-check 스레드 정리 */
+    override fun dispose() {
         stopHealthCheckTimer()
-        healthCheckExecutor.shutdown()
+        healthCheckExecutor.shutdownNow()
     }
 
     private fun notifyListeners() {

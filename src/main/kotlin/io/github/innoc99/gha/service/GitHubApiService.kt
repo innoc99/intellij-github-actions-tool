@@ -1,11 +1,14 @@
 package io.github.innoc99.gha.service
 
 import com.google.gson.Gson
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.text.StringUtil
+import io.github.innoc99.gha.GhaBundle
 import io.github.innoc99.gha.model.*
 import io.github.innoc99.gha.settings.GitHubActionsGlobalSettings
 import kotlinx.coroutines.runBlocking
@@ -20,8 +23,11 @@ import java.io.IOException
 import java.time.Instant
 import java.util.Base64
 
+/** 사용자 액션 POST 결과. 실패 시 [errorMessage]에 서버 응답 사유(알림 HTML용으로 이스케이프됨)를 담는다. */
+data class PostResult(val success: Boolean, val errorMessage: String? = null)
+
 /**
- * GitHub Enterprise API 연동 서비스
+ * GitHub / GitHub Enterprise API 연동 서비스
  */
 @Service(Service.Level.PROJECT)
 class GitHubApiService(private val project: Project) {
@@ -61,7 +67,7 @@ class GitHubApiService(private val project: Project) {
     fun resolveToken(): String? {
         val state = globalSettings.state
         if (!state.useGitHubAccountSettings) {
-            return state.personalAccessToken.ifBlank { null }
+            return globalSettings.getPersonalAccessToken()
         }
 
         val info = getRemoteInfo() ?: return null
@@ -86,7 +92,7 @@ class GitHubApiService(private val project: Project) {
     fun hasValidToken(): Boolean {
         val state = globalSettings.state
         if (!state.useGitHubAccountSettings) {
-            return state.personalAccessToken.isNotBlank()
+            return state.hasPersonalAccessToken
         }
 
         val info = getRemoteInfo() ?: return false
@@ -95,7 +101,7 @@ class GitHubApiService(private val project: Project) {
     }
 
     /**
-     * 경량 health-check (GET /api/v3/rate_limit)
+     * 경량 health-check (GET {apiUrl}/rate_limit)
      * @return 네트워크 + 인증 정상이면 true
      */
     fun healthCheck(): Boolean {
@@ -103,8 +109,7 @@ class GitHubApiService(private val project: Project) {
         val info = getRemoteInfo() ?: return false
         if (token.isNullOrBlank()) return false
 
-        val baseUrl = info.baseUrl.trimEnd('/')
-        val url = "$baseUrl/api/v3/rate_limit"
+        val url = "${info.apiUrl}/rate_limit"
         val request = Request.Builder()
             .url(url)
             .addHeader("Authorization", "token $token")
@@ -118,27 +123,28 @@ class GitHubApiService(private val project: Project) {
         }
     }
 
-    private fun buildRequest(endpoint: String): Request? {
+    private fun buildRequest(endpoint: String, postJson: String? = null): Request? {
         val token = resolveToken()
         val info = getRemoteInfo() ?: return null
         if (token.isNullOrBlank()) return null
 
-        val baseUrl = info.baseUrl.trimEnd('/')
-        val url = "$baseUrl/api/v3/repos/${info.owner}/${info.repository}$endpoint"
+        val url = "${info.apiUrl}/repos/${info.owner}/${info.repository}$endpoint"
 
         return Request.Builder()
             .url(url)
             .addHeader("Authorization", "token $token")
             .addHeader("Accept", "application/vnd.github.v3+json")
+            .apply { if (postJson != null) post(postJson.toRequestBody(JSON_MEDIA_TYPE)) }
             .build()
     }
 
-    fun fetchWorkflows(): List<Workflow> {
+    /** @return 실패 시 null (빈 목록과 구분) */
+    fun fetchWorkflows(): List<Workflow>? {
         val allWorkflows = mutableListOf<Workflow>()
         var page = 1
 
         while (true) {
-            val request = buildRequest("/actions/workflows?per_page=100&page=$page") ?: return allWorkflows
+            val request = buildRequest("/actions/workflows?per_page=100&page=$page") ?: return null
             val pageResult = executeRequest(request) { response ->
                 val json = gson.fromJson(response, JsonObject::class.java)
                 val workflows = json.getAsJsonArray("workflows")
@@ -153,7 +159,7 @@ class GitHubApiService(private val project: Project) {
                         updatedAt = Instant.parse(obj.get("updated_at").asString)
                     )
                 }
-            } ?: break
+            } ?: return null
 
             allWorkflows.addAll(pageResult)
             if (pageResult.size < 100) break
@@ -163,41 +169,64 @@ class GitHubApiService(private val project: Project) {
         return allWorkflows
     }
 
-    fun fetchWorkflowRuns(limit: Int = 30): List<WorkflowRun> {
-        val request = buildRequest("/actions/runs?per_page=$limit") ?: return emptyList()
+    /**
+     * @param workflowId 지정하면 해당 워크플로우의 Run만 조회 (전체 최근 N개에서 거르면 드물게 도는 워크플로우가 누락됨)
+     * @param status 지정하면 해당 상태/결론(success 등)의 Run만 조회
+     * @return 실패 시 null (빈 목록과 구분)
+     */
+    fun fetchWorkflowRuns(workflowId: Long? = null, limit: Int = 30, status: String? = null): List<WorkflowRun>? {
+        val path = if (workflowId != null) "/actions/workflows/$workflowId/runs" else "/actions/runs"
+        val statusQuery = status?.let { "&status=$it" } ?: ""
+        val request = buildRequest("$path?per_page=$limit$statusQuery") ?: return null
         return executeRequest(request) { response ->
-            val json = gson.fromJson(response, JsonObject::class.java)
-            val runs = json.getAsJsonArray("workflow_runs")
-            runs.map { runJson ->
-                val obj = runJson.asJsonObject
-                WorkflowRun(
-                    id = obj.get("id").asLong,
-                    name = obj.get("name").asString,
-                    workflowId = obj.get("workflow_id").asLong,
-                    status = obj.get("status").asString,
-                    conclusion = obj.get("conclusion")?.let {
-                        if (it.isJsonNull) null else it.asString
-                    },
-                    htmlUrl = obj.get("html_url").asString,
-                    createdAt = Instant.parse(obj.get("created_at").asString),
-                    updatedAt = Instant.parse(obj.get("updated_at").asString),
-                    headBranch = obj.get("head_branch").asString,
-                    headSha = obj.get("head_sha").asString,
-                    event = obj.get("event").asString,
-                    runNumber = obj.get("run_number").asInt,
-                    runAttempt = obj.get("run_attempt").asInt,
-                    actor = obj.get("actor")?.let { actorEl ->
-                        if (actorEl.isJsonNull) null
-                        else actorEl.asJsonObject.get("login")?.asString
-                    }
-                )
-            }
-        } ?: emptyList()
+            gson.fromJson(response, JsonObject::class.java).getAsJsonArray("workflow_runs").map { parseRun(it.asJsonObject) }
+        }
     }
 
-    fun fetchWorkflowJobs(runId: Long): List<WorkflowJob> {
-        val request = buildRequest("/actions/runs/$runId/jobs") ?: return emptyList()
-        return executeRequest(request) { response ->
+    private fun parseRun(obj: JsonObject) = WorkflowRun(
+        id = obj.get("id").asLong,
+        name = obj.get("name").asString,
+        workflowId = obj.get("workflow_id").asLong,
+        status = obj.get("status").asString,
+        conclusion = obj.get("conclusion")?.takeUnless { it.isJsonNull }?.asString,
+        htmlUrl = obj.get("html_url").asString,
+        createdAt = Instant.parse(obj.get("created_at").asString),
+        updatedAt = Instant.parse(obj.get("updated_at").asString),
+        headBranch = obj.get("head_branch")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+        headSha = obj.get("head_sha").asString,
+        event = obj.get("event").asString,
+        runNumber = obj.get("run_number").asInt,
+        runAttempt = obj.get("run_attempt")?.takeUnless { it.isJsonNull }?.asInt ?: 1,
+        actor = obj.get("actor")?.takeUnless { it.isJsonNull }?.asJsonObject?.get("login")?.asString
+    )
+
+    /**
+     * 최근 Git 태그 중 배포 버전 태그만 반환 (태그 → 커밋 sha 매핑)
+     * @return 실패 시 null
+     */
+    fun fetchVersionTags(): List<VersionTag>? {
+        val tags = mutableListOf<VersionTag>()
+        // 모노레포는 모듈별 태그가 섞이므로 한 페이지로는 일부 모듈 버전이 빠질 수 있음
+        // ponytail: 최대 300개 — 태그가 더 많으면 git/matching-refs 기반 prefix 조회로 전환
+        for (page in 1..TAG_MAX_PAGES) {
+            val request = buildRequest("/tags?per_page=100&page=$page") ?: return null
+            val pageTags = executeRequest(request) { response ->
+                gson.fromJson(response, JsonArray::class.java)
+            } ?: return if (page == 1) null else tags
+            pageTags.mapNotNullTo(tags) {
+                val obj = it.asJsonObject
+                VersionTag.parse(obj.get("name").asString, obj.getAsJsonObject("commit").get("sha").asString)
+            }
+            if (pageTags.size() < 100) break
+        }
+        return tags
+    }
+
+    /** @return 실패 시 null (빈 목록과 구분) */
+    /** @param userAction Run 클릭 등 사용자 동작이면 OFFLINE이어도 health-check 후 시도 */
+    fun fetchWorkflowJobs(runId: Long, userAction: Boolean = false): List<WorkflowJob>? {
+        val request = buildRequest("/actions/runs/$runId/jobs") ?: return null
+        return executeRequest(request, isUserAction = userAction) { response ->
             val json = gson.fromJson(response, JsonObject::class.java)
             val jobs = json.getAsJsonArray("jobs")
             jobs.map { jobJson ->
@@ -237,23 +266,27 @@ class GitHubApiService(private val project: Project) {
                     steps = steps
                 )
             }
-        } ?: emptyList()
+        }
     }
 
     /**
      * 워크플로우 YAML에서 workflow_dispatch inputs 파싱
      */
-    fun fetchDispatchInputs(workflowPath: String): List<DispatchInput> {
-        if (workflowPath.isBlank()) return emptyList()
-        val request = buildRequest("/contents/$workflowPath") ?: return emptyList()
-        val yamlContent = executeRequest(request) { response ->
+    /**
+     * 사용자 액션(Dispatch 다이얼로그) — OFFLINE이어도 health-check 후 시도
+     * @return 조회 실패 시 null. 빈 목록으로 돌려주면 inputs 없이 Dispatch가 나가 배포 사고가 될 수 있다.
+     */
+    fun fetchDispatchInputs(workflowPath: String): List<DispatchInput>? {
+        if (workflowPath.isBlank()) return null
+        val request = buildRequest("/contents/$workflowPath") ?: return null
+        val yamlContent = executeRequest(request, isUserAction = true) { response ->
             val json = gson.fromJson(response, JsonObject::class.java)
             val content = json.get("content")?.asString ?: return@executeRequest null
             String(Base64.getMimeDecoder().decode(content))
         }
         if (yamlContent == null) {
             logger.warn("fetchDispatchInputs: YAML 콘텐츠 조회 실패 (path=$workflowPath)")
-            return emptyList()
+            return null
         }
         return parseDispatchInputs(yamlContent)
     }
@@ -297,62 +330,74 @@ class GitHubApiService(private val project: Project) {
         }
     }
 
+    /**
+     * Job의 annotations (`::error::`, `::warning::` 등) — Job id는 check run id와 같다
+     * @return 실패 시 null
+     */
+    fun fetchJobAnnotations(jobId: Long): List<JobAnnotation>? {
+        val request = buildRequest("/check-runs/$jobId/annotations") ?: return null
+        return executeRequest(request, isUserAction = true) { response ->
+            gson.fromJson(response, JsonArray::class.java).map {
+                val obj = it.asJsonObject
+                JobAnnotation(
+                    level = obj.get("annotation_level")?.takeUnless { el -> el.isJsonNull }?.asString ?: "notice",
+                    title = obj.get("title")?.takeUnless { el -> el.isJsonNull }?.asString.orEmpty(),
+                    message = obj.get("message")?.takeUnless { el -> el.isJsonNull }?.asString.orEmpty()
+                )
+            }
+        }
+    }
+
+    fun rerunWorkflowRun(runId: Long): PostResult = executePost("/actions/runs/$runId/rerun")
+
+    fun rerunFailedJobs(runId: Long): PostResult = executePost("/actions/runs/$runId/rerun-failed-jobs")
+
+    fun cancelWorkflowRun(runId: Long): PostResult = executePost("/actions/runs/$runId/cancel")
+
+    /** 사용자 액션(Job 선택) — OFFLINE이어도 health-check 후 시도 */
     fun fetchJobLogs(jobId: Long): String? {
         val request = buildRequest("/actions/jobs/$jobId/logs") ?: return null
-        return executeRequest(request) { it }
+        return executeRequest(request, isUserAction = true) { it }
     }
 
     /**
      * 워크플로우 수동 실행 (workflow_dispatch)
-     * @return 성공 여부
      */
-    fun dispatchWorkflow(workflowId: Long, ref: String, inputs: Map<String, String> = emptyMap()): Boolean {
-        // dispatch는 항상 사용자 액션
+    fun dispatchWorkflow(workflowId: Long, ref: String, inputs: Map<String, String> = emptyMap()): PostResult {
+        val payload = JsonObject().apply {
+            addProperty("ref", ref)
+            if (inputs.isNotEmpty()) {
+                add("inputs", JsonObject().apply { inputs.forEach { (k, v) -> addProperty(k, v) } })
+            }
+        }
+        return executePost("/actions/workflows/$workflowId/dispatches", gson.toJson(payload))
+    }
+
+    /**
+     * 사용자 액션 POST. OFFLINE이면 health-check 후 시도한다.
+     * 4xx는 서버가 응답한 것이므로 네트워크 실패로 기록하지 않는다.
+     */
+    private fun executePost(endpoint: String, jsonBody: String = "{}"): PostResult {
         if (!connectionState.isOnline) {
-            if (!healthCheck()) return false
+            if (!healthCheck()) return PostResult(false, GhaBundle.message("api.offline"))
             connectionState.recordSuccess()
         }
-
-        val token = resolveToken()
-        val info = getRemoteInfo() ?: return false
-        if (token.isNullOrBlank()) return false
-
-        val baseUrl = info.baseUrl.trimEnd('/')
-        val url = "$baseUrl/api/v3/repos/${info.owner}/${info.repository}/actions/workflows/$workflowId/dispatches"
-
-        val body = buildString {
-            append("{\"ref\":\"$ref\"")
-            if (inputs.isNotEmpty()) {
-                append(",\"inputs\":{")
-                append(inputs.entries.joinToString(",") { (k, v) ->
-                    "\"$k\":\"$v\""
-                })
-                append("}")
-            }
-            append("}")
-        }
-
-        val request = Request.Builder()
-            .url(url)
-            .addHeader("Authorization", "token $token")
-            .addHeader("Accept", "application/vnd.github.v3+json")
-            .post(body.toRequestBody("application/json".toMediaTypeOrNull()))
-            .build()
+        val request = buildRequest(endpoint, jsonBody) ?: return PostResult(false, GhaBundle.message("api.notConfigured"))
 
         return try {
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    logger.warn("Dispatch 실패: ${response.code} - ${response.body?.string()}")
-                    connectionState.recordFailure()
-                }
-                val success = response.isSuccessful || response.code == 204
-                if (success) connectionState.recordSuccess()
-                success
+                if (response.code >= 500) connectionState.recordFailure() else connectionState.recordSuccess()
+                if (response.isSuccessful) return PostResult(true)
+
+                val body = response.body?.string().orEmpty()
+                logger.warn("POST $endpoint 실패: ${response.code} - $body")
+                val message = runCatching { gson.fromJson(body, JsonObject::class.java).get("message").asString }.getOrNull()
+                PostResult(false, StringUtil.escapeXmlEntities("HTTP ${response.code}" + (message?.let { ": $it" } ?: "")))
             }
         } catch (e: IOException) {
-            logger.debug("Dispatch 요청 오류", e)
+            logger.debug("POST 요청 오류: $endpoint", e)
             connectionState.recordFailure()
-            false
+            PostResult(false, e.message?.let(StringUtil::escapeXmlEntities))
         }
     }
 
@@ -382,18 +427,25 @@ class GitHubApiService(private val project: Project) {
                     }
                     return null
                 }
-                connectionState.recordSuccess()
                 val body = response.body?.string() ?: return null
-                parser(body)
+                // VPN/프록시 단절 시 200 + HTML 로그인 페이지가 올 수 있음 → 파싱 실패도 실패로 기록
+                parser(body).also { connectionState.recordSuccess() }
             }
         } catch (e: IOException) {
             logger.debug("API 요청 오류", e)
+            connectionState.recordFailure()
+            null
+        } catch (e: RuntimeException) {
+            logger.debug("API 응답 파싱 실패", e)
             connectionState.recordFailure()
             null
         }
     }
 
     companion object {
+        private val JSON_MEDIA_TYPE = "application/json".toMediaTypeOrNull()
+        private const val TAG_MAX_PAGES = 3
+
         fun getInstance(project: Project): GitHubApiService = project.getService(GitHubApiService::class.java)
     }
 }

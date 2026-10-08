@@ -32,6 +32,9 @@ class GitHubActionsSettingsConfigurable(private val project: Project) : Configur
     private val settings = GitHubActionsSettings.getInstance(project)
     private val globalSettings = GitHubActionsGlobalSettings.getInstance()
 
+    /** reset 시 PasswordSafe에서 읽은 PAT (isModified 비교용) */
+    private var loadedToken = ""
+
     override fun getDisplayName(): String = GhaBundle.message("settings.displayName")
 
     override fun createComponent(): JComponent {
@@ -72,12 +75,7 @@ class GitHubActionsSettingsConfigurable(private val project: Project) : Configur
 
                 tokenRow = row("Personal Access Token:") {
                     tokenField = JBPasswordField()
-                    cell(tokenField)
-                        .columns(COLUMNS_LARGE)
-                        .bindText(
-                            getter = { globalSettings.state.personalAccessToken },
-                            setter = { globalSettings.state.personalAccessToken = it }
-                        )
+                    cell(tokenField).columns(COLUMNS_LARGE)
                 }.rowComment(GhaBundle.message("settings.auth.tokenComment"))
             }
 
@@ -121,7 +119,7 @@ class GitHubActionsSettingsConfigurable(private val project: Project) : Configur
         val state = settings.state
         val globalState = globalSettings.state
         return useGitHubAccountCheckBox.isSelected != globalState.useGitHubAccountSettings ||
-                String(tokenField.password) != globalState.personalAccessToken ||
+                String(tokenField.password) != loadedToken ||
                 autoRefreshCheckBox.isSelected != state.autoRefreshEnabled ||
                 refreshIntervalField.text.toIntOrNull() != state.refreshIntervalSeconds
     }
@@ -129,7 +127,11 @@ class GitHubActionsSettingsConfigurable(private val project: Project) : Configur
     override fun apply() {
         val state = settings.state
         globalSettings.state.useGitHubAccountSettings = useGitHubAccountCheckBox.isSelected
-        globalSettings.state.personalAccessToken = String(tokenField.password)
+        val token = String(tokenField.password)
+        if (token != loadedToken) {
+            globalSettings.savePersonalAccessToken(token)
+            loadedToken = token
+        }
         state.autoRefreshEnabled = autoRefreshCheckBox.isSelected
         state.refreshIntervalSeconds = refreshIntervalField.text.toIntOrNull()?.coerceAtLeast(10) ?: 30
     }
@@ -137,7 +139,9 @@ class GitHubActionsSettingsConfigurable(private val project: Project) : Configur
     override fun reset() {
         val state = settings.state
         useGitHubAccountCheckBox.isSelected = globalSettings.state.useGitHubAccountSettings
-        tokenField.text = globalSettings.state.personalAccessToken
+        // 설정 화면을 열 때 1회 Keychain 조회 (사용자 동작)
+        loadedToken = globalSettings.getPersonalAccessToken().orEmpty()
+        tokenField.text = loadedToken
         autoRefreshCheckBox.isSelected = state.autoRefreshEnabled
         refreshIntervalField.text = state.refreshIntervalSeconds.toString()
         updateAuthUI()

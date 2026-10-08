@@ -13,7 +13,10 @@ An IntelliJ IDEA plugin for monitoring GitHub Actions workflows, viewing logs, a
 | **Workflow Monitoring** | Real-time auto-refresh of workflow lists and run statuses |
 | **Manual Dispatch** | Trigger `workflow_dispatch` workflows directly from the IDE |
 | **Jobs/Steps Detail** | View Job trees and Step-level logs per Run |
-| **Log Search** | Keyword search within Step logs with auto-highlight and expand |
+| **Re-run / Cancel** | Re-run all jobs, re-run failed jobs, or cancel a run from the Run context menu |
+| **Failure Summary** | Job annotations (errors/warnings) shown above the log |
+| **Log Viewer** | Editor-based log with step/group folding, error highlighting, and search |
+| **Release Versions & Redeploy** | Shows version tags (`name-vYYYY.MM.DD.HHmm`) on runs and the last successful run per workflow; redeploys a selected version via a `redeploy_tag` dispatch input |
 | **Status/Branch Filter** | Filter by result (success, failure, etc.) and branch |
 | **Quick Search** | Speed Search in the Run list — just start typing |
 | **VCS Auto-Detection** | Automatically detects GitHub server/owner/repo from Git remote |
@@ -24,7 +27,7 @@ An IntelliJ IDEA plugin for monitoring GitHub Actions workflows, viewing logs, a
 
 ## Requirements
 
-- **IntelliJ IDEA** 2024.1 ~ 2026.1 (Community / Ultimate)
+- **IntelliJ IDEA** 2024.1 ~ 2026.2 (Community / Ultimate)
 - **Git** plugin enabled (built-in)
 - **GitHub** plugin enabled (built-in)
 - A **Git remote** configured in the project (GitHub or GitHub Enterprise)
@@ -37,7 +40,7 @@ An IntelliJ IDEA plugin for monitoring GitHub Actions workflows, viewing logs, a
 
 Download the latest plugin zip:
 
-> **[intellij-github-actions-tool-1.1.0.zip](dist/intellij-github-actions-tool-1.1.0.zip)**
+> **[intellij-github-actions-tool-1.2.0.zip](dist/intellij-github-actions-tool-1.2.0.zip)**
 
 Or download directly from the `dist/` folder in this repository.
 
@@ -48,7 +51,7 @@ Or download directly from the `dist/` folder in this repository.
 3. Select **Plugins** from the left menu.
 4. Click the **gear icon (⚙)** at the top.
 5. Select **Install Plugin from Disk...**
-6. Choose the downloaded `intellij-github-actions-tool-1.1.0.zip`.
+6. Choose the downloaded `intellij-github-actions-tool-1.2.0.zip`.
 7. Click **OK** and **Restart IDE**.
 
 ### 3. Verify installation
@@ -80,7 +83,7 @@ If you already have a GitHub account registered in IntelliJ, no additional setup
 1. **Settings (⌘,)** > **Tools** > **GitHub Actions Tool**
 2. Uncheck **"Use IntelliJ GitHub account settings"**.
 3. Enter your **Personal Access Token**.
-4. Click **Apply** or **OK**.
+4. Click **Apply** or **OK**. The token is stored in the IDE password safe (OS keychain), not in plain-text settings.
 
 **To generate a token:**
 
@@ -101,7 +104,7 @@ GitHub server URL, owner, and repository are auto-detected from Git remote. No m
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Auto-refresh enabled | Auto-refresh workflow run list | Enabled |
+| Auto-refresh enabled | Auto-refresh workflow run list (paused while the IDE is inactive or the tool window is hidden) | Enabled |
 | Refresh interval (seconds) | Auto-refresh interval (minimum 10s) | 30s |
 
 ---
@@ -147,8 +150,9 @@ Only workflows with `workflow_dispatch` event can be triggered.
 ### Log Search
 
 Enter a keyword in the **"Search logs..."** field in **④ Step Log Panel**:
-- Matching lines are **highlighted in yellow**.
-- Steps and groups containing matches are **auto-expanded**.
+- Matches are **highlighted** and folded steps/groups containing them are **auto-expanded**.
+- Press **Enter** / **Shift+Enter** to jump to the next / previous match.
+- Failed steps are expanded by default and the view scrolls to the first error line.
 
 ---
 
@@ -159,16 +163,16 @@ Enter a keyword in the **"Search logs..."** field in **④ Step Log Panel**:
 | **Type** in Run list | Quick Search (Speed Search) |
 | **Click** Run | Load Jobs detail tree |
 | **Double-click** Run | Open in browser |
-| **Right-click** Run | Context menu (Open in web) |
+| **Right-click** Run | Context menu (Open in web, Re-run, Re-run failed jobs, Redeploy this version, Cancel) |
 | **Right-click** Workflow | Context menu (Dispatch, Open in web) |
 | **Click** Job | Show Step log panel |
-| **Click** Step header | Toggle log collapse/expand |
+| **Click** fold marker of a step/group | Toggle log collapse/expand |
 
 ---
 
 ## Tech Stack
 
-- **Kotlin** + IntelliJ Platform SDK 2024.1+
+- **Kotlin** + IntelliJ Platform SDK 2024.1+ (IntelliJ Platform Gradle Plugin 2.x)
 - **OkHttp** — HTTP client
 - **Gson** — JSON parsing
 - **SnakeYAML** — Workflow YAML parsing

@@ -1,10 +1,16 @@
 package io.github.innoc99.gha.ui
 
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.Disposable
+import java.time.Instant
+import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.util.Condition
+import com.intellij.openapi.util.Disposer
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.project.Project
 import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.JBColor
@@ -12,6 +18,11 @@ import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.ListSpeedSearch
 import io.github.innoc99.gha.GhaBundle
+import io.github.innoc99.gha.model.JobAnnotation
+import io.github.innoc99.gha.model.REDEPLOY_TAG_INPUT
+import io.github.innoc99.gha.model.VersionTag
+import io.github.innoc99.gha.model.findVersionTag
+import io.github.innoc99.gha.model.isActiveStatus
 import io.github.innoc99.gha.model.Workflow
 import io.github.innoc99.gha.model.WorkflowJob
 import io.github.innoc99.gha.model.WorkflowRun
@@ -20,6 +31,8 @@ import io.github.innoc99.gha.service.ConnectionStateListener
 import io.github.innoc99.gha.service.ConnectionStateManager
 import io.github.innoc99.gha.service.GitHubApiService
 import io.github.innoc99.gha.service.GitRemoteDetector
+import io.github.innoc99.gha.service.PostResult
+import io.github.innoc99.gha.settings.GitHubActionsSettings
 import io.github.innoc99.gha.settings.GitHubActionsSettingsConfigurable
 import com.intellij.util.ui.JBUI
 import java.awt.*
@@ -33,7 +46,7 @@ import javax.swing.*
  * GitHub Actions Tool Window 메인 패널
  * 1번: 워크플로우 트리 / 2번: 런 목록 / 3번: Jobs 트리 / 4번: Step 로그 뷰
  */
-class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()) {
+class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
 
     private val apiService = GitHubApiService.getInstance(project)
     private val cardLayout = CardLayout()
@@ -60,7 +73,14 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
 
     // 4번: Step 로그 패널
     private val stepLogPanel = StepLogPanel()
-    private val logCache = mutableMapOf<Long, String>()
+    private val logCache = mutableMapOf<Long, JobLogEntry>()
+
+    private data class JobLogEntry(val log: ParsedJobLog, val annotations: List<JobAnnotation>)
+
+    // Step 로그 패널의 Editor 해제를 패널 수명에 연결
+    init {
+        Disposer.register(this, stepLogPanel)
+    }
 
     // 3분할 메인 스플릿 (로그 패널 표시/숨김 제어용)
     private lateinit var outerSplit: JSplitPane
@@ -70,23 +90,16 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
         toolTipText = GhaBundle.message("tooltip.refreshRuns")
         isBorderPainted = false
         isContentAreaFilled = false
-        addActionListener {
-            if (!connectionState.isOnline) {
-                ApplicationManager.getApplication().executeOnPooledThread {
-                    val recovered = apiService.healthCheck()
-                    if (recovered) {
-                        connectionState.recordSuccess()
-                    } else {
-                        ApplicationManager.getApplication().invokeLater {
-                            offlineBannerLabel.text = GhaBundle.message("banner.offline.checkNetwork")
-                        }
-                    }
-                }
-            } else {
-                refreshRunsSilently()
-            }
-        }
+        addActionListener { refreshFromUser(::refreshRunsSilently) }
     }
+
+    // 배포 버전 태그 (Run ↔ 배포 버전 연결)
+    private var versionTags: List<VersionTag> = emptyList()
+
+    // 워크플로우별 마지막 성공 Run (트리 요약 = phase별 현재 배포 현황)
+    private val lastSuccessRuns = mutableMapOf<Long, WorkflowRun>()
+
+    private val shortTimeFormatter = DateTimeFormatter.ofPattern("MM/dd HH:mm")
 
     // 현재 선택된 워크플로우
     private var selectedWorkflow: Workflow? = null
@@ -97,9 +110,32 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
     // 사일런트 갱신 중 선택 이벤트 무시 플래그
     private var suppressRunSelection = false
 
-    // 자동 갱신 타이머
-    private val listRefreshTimer = javax.swing.Timer(20_000) { refreshRunsSilently() }
-    private val detailRefreshTimer = javax.swing.Timer(5_000) { refreshDetailIfInProgress() }
+    private val settings = GitHubActionsSettings.getInstance(project)
+
+    // 자동 갱신 타이머 — 자동 갱신 꺼짐·IDE 백그라운드·Tool Window 숨김이면 건너뜀
+    private val listRefreshTimer = javax.swing.Timer(listRefreshDelayMs()) {
+        listRefreshTimerDelaySync()
+        if (!canAutoPoll()) return@Timer
+        // 첫 전체 로딩이 실패했으면 Run만 갱신하지 말고 전체 로딩 재시도 (안내 카드에 고착 방지)
+        if (initialLoadDone) refreshRunsSilently() else loadData()
+    }
+    private val detailRefreshTimer = javax.swing.Timer(5_000) { if (canAutoPoll()) refreshDetailIfInProgress() }
+
+    // 요청 진행 중 여부 (EDT 전용) — 응답 지연 시 타이머 요청이 쌓이지 않도록
+    private var runsRefreshInFlight = false
+    private var loadInFlight = false
+
+    // 전체 로딩(워크플로우 목록)이 한 번이라도 성공했는지
+    private var initialLoadDone = false
+
+    // dispose 이후 대기 중이던 EDT 콜백이 release된 Editor·정지된 타이머를 건드리지 않도록
+    @Volatile
+    private var disposed = false
+    private val expired = Condition<Any?> { disposed || project.isDisposed }
+
+    // 태그를 마지막으로 조회한 시각 — 이후 성공한 Run이 있을 때만 다시 조회
+    @Volatile
+    private var tagsFetchedAt: Instant = Instant.EPOCH
 
     // 오프라인 배너
     private val offlineBanner = JPanel(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
@@ -112,7 +148,19 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
     }
     private val connectionState by lazy { ConnectionStateManager.getInstance(project) }
 
+    private val connectionListener = object : ConnectionStateListener {
+        override fun onStateChanged(newState: ConnectionState) {
+            onEdt {
+                when (newState) {
+                    ConnectionState.OFFLINE -> onGoOffline()
+                    ConnectionState.ONLINE -> onGoOnline()
+                }
+            }
+        }
+    }
+
     companion object {
+        private val logger = Logger.getInstance(GitHubActionsToolWindowPanel::class.java)
         private const val CARD_GUIDE = "guide"
         private const val CARD_MAIN = "main"
         private const val CARD_NO_ACTIONS = "no_actions"
@@ -123,9 +171,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
         // VCS 초기화 완료 후 로딩
         ApplicationManager.getApplication().executeOnPooledThread {
             Thread.sleep(1500)
-            ApplicationManager.getApplication().invokeLater {
-                refreshView()
-            }
+            onEdt { refreshView() }
         }
     }
 
@@ -143,17 +189,51 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
         contentPanel.add(createMainPanel(), CARD_MAIN)
         add(contentPanel, BorderLayout.CENTER)
 
-        // 상태 전환 리스너 등록
-        connectionState.addListener(object : ConnectionStateListener {
-            override fun onStateChanged(newState: ConnectionState) {
-                ApplicationManager.getApplication().invokeLater {
-                    when (newState) {
-                        ConnectionState.OFFLINE -> onGoOffline()
-                        ConnectionState.ONLINE -> onGoOnline()
-                    }
-                }
+        // 상태 전환 리스너 등록 (dispose에서 해제)
+        connectionState.addListener(connectionListener)
+    }
+
+    /** Tool Window 제거·프로젝트 종료 시 호출 — 타이머와 리스너 해제 */
+    override fun dispose() {
+        disposed = true
+        listRefreshTimer.stop()
+        detailRefreshTimer.stop()
+        connectionState.removeListener(connectionListener)
+    }
+
+    /** 패널이 살아 있을 때만 EDT에서 실행 */
+    private fun onEdt(action: () -> Unit) {
+        ApplicationManager.getApplication().invokeLater({ action() }, expired)
+    }
+
+    /** 자동 polling 허용 여부: 자동 갱신 켜짐 + IDE 활성 + Tool Window 표시 중 */
+    private fun canAutoPoll(): Boolean =
+        settings.state.autoRefreshEnabled && ApplicationManager.getApplication().isActive && isShowing
+
+    private fun listRefreshDelayMs(): Int = settings.state.refreshIntervalSeconds.coerceAtLeast(10) * 1000
+
+    /** 설정 화면에서 갱신 주기를 바꾸면 다음 tick부터 반영 */
+    private fun listRefreshTimerDelaySync() {
+        val delay = listRefreshDelayMs()
+        if (listRefreshTimer.delay != delay) listRefreshTimer.delay = delay
+    }
+
+    /**
+     * 사용자 새로고침 (툴바·Tools 메뉴·Runs 버튼). OFFLINE이면 health-check로 복구를 먼저 시도한다.
+     * 복구되면 ONLINE 전환 리스너가 전체 리로드를 수행한다.
+     */
+    fun refreshFromUser(onlineAction: () -> Unit = ::refreshView) {
+        if (connectionState.isOnline) {
+            onlineAction()
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (apiService.healthCheck()) {
+                connectionState.recordSuccess()
+            } else {
+                onEdt { offlineBannerLabel.text = GhaBundle.message("banner.offline.checkNetwork") }
             }
-        })
+        }
     }
 
     private fun createMainPanel(): JPanel {
@@ -167,10 +247,13 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
             applyFilters()
             detailPanel.clear()
             hideLogPanel()
+            // 전체 최근 Run에는 드물게 도는 워크플로우가 없을 수 있으므로 해당 워크플로우 Run을 따로 조회
+            refreshRunsSilently()
         }
         treePanel.onDispatchRequested = { workflow ->
             showDispatchDialog(workflow)
         }
+        treePanel.workflowSummary = { workflow -> workflowSummary(workflow) }
         treePanel.getWorkflowWebUrl = { workflow ->
             getWorkflowWebUrl(workflow)
         }
@@ -183,7 +266,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
         val topPanel = JPanel(BorderLayout())
         topPanel.add(createFilterPanel(), BorderLayout.NORTH)
 
-        runList.cellRenderer = WorkflowRunListCellRenderer()
+        runList.cellRenderer = WorkflowRunListCellRenderer { run -> versionOf(run) }
         runList.selectionMode = ListSelectionModel.SINGLE_SELECTION
         ListSpeedSearch.installOn(runList) { it.name }
 
@@ -213,15 +296,12 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
 
             private fun handlePopup(e: MouseEvent) {
                 if (!e.isPopupTrigger) return
-                val index = runList.locationToIndex(e.point) ?: return
+                val index = runList.locationToIndex(e.point)
+                if (index < 0) return
                 runList.selectedIndex = index
                 val selected = runList.selectedValue ?: return
 
-                val popup = JPopupMenu()
-                val webItem = JMenuItem(GhaBundle.message("contextMenu.openWeb"), AllIcons.General.Web)
-                webItem.addActionListener { BrowserUtil.browse(selected.htmlUrl) }
-                popup.add(webItem)
-                popup.show(runList, e.x, e.y)
+                buildRunPopup(selected).show(runList, e.x, e.y)
             }
         })
 
@@ -241,6 +321,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
             showLogPanel()
             loadJobLog(job)
         }
+        detailPanel.onJobUpdated = { job -> if (currentJob?.id == job.id) currentJob = job }
         detailPanel.onJobDeselected = {
             currentJob = null
             hideLogPanel()
@@ -316,7 +397,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
 
         val cached = logCache[job.id]
         if (cached != null) {
-            stepLogPanel.showJobLog(displayName, job.steps, cached)
+            stepLogPanel.showJobLog(displayName, cached.log, cached.annotations)
             return
         }
 
@@ -324,11 +405,17 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
         stepLogPanel.setRefreshing(true)
         ApplicationManager.getApplication().executeOnPooledThread {
             val logs = apiService.fetchJobLogs(job.id)
-            ApplicationManager.getApplication().invokeLater {
-                val logContent = logs ?: GhaBundle.message("log.loadFailed")
-                logCache[job.id] = logContent
-                stepLogPanel.showJobLog(displayName, job.steps, logContent)
-                stepLogPanel.setRefreshing(false)
+            val annotations = apiService.fetchJobAnnotations(job.id).orEmpty()
+            // 수십 MB 로그도 있으므로 파싱은 EDT 밖에서
+            val parsed = logs?.let { JobLogParser.parse(it, job.steps) }
+            onEdt {
+                // 실패는 캐시하지 않음 — 다시 선택하거나 새로고침하면 재조회
+                if (parsed != null) logCache[job.id] = JobLogEntry(parsed, annotations)
+                // 그사이 다른 Job을 골랐거나 로그 패널을 닫았으면 표시하지 않음
+                if (currentJob?.id != job.id || !stepLogPanel.isVisible) return@onEdt
+                // 진행 중 Job은 완료 전까지 로그 API가 응답하지 않을 수 있음
+                val failure = GhaBundle.message(if (isActiveStatus(job.status)) "log.notReady" else "log.loadFailed")
+                stepLogPanel.showJobLog(displayName, parsed, annotations, failure)
             }
         }
     }
@@ -388,22 +475,7 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
     private fun createToolbar(): JPanel {
         val actionGroup = DefaultActionGroup().apply {
             add(object : AnAction(GhaBundle.message("toolbar.refresh"), GhaBundle.message("toolbar.refresh.description"), AllIcons.Actions.Refresh) {
-                override fun actionPerformed(e: AnActionEvent) {
-                    if (!connectionState.isOnline) {
-                        ApplicationManager.getApplication().executeOnPooledThread {
-                            val recovered = apiService.healthCheck()
-                            if (recovered) {
-                                connectionState.recordSuccess()
-                            } else {
-                                ApplicationManager.getApplication().invokeLater {
-                                    offlineBannerLabel.text = GhaBundle.message("banner.offline.checkNetwork")
-                                }
-                            }
-                        }
-                    } else {
-                        refreshView()
-                    }
-                }
+                override fun actionPerformed(e: AnActionEvent) = refreshFromUser()
             })
             add(object : AnAction(GhaBundle.message("toolbar.settings"), GhaBundle.message("toolbar.settings.description"), AllIcons.General.Settings) {
                 override fun actionPerformed(e: AnActionEvent) {
@@ -507,41 +579,60 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
     }
 
     private fun loadData() {
+        if (loadInFlight) return
+        loadInFlight = true
         detailPanel.clear()
         logCache.clear()
         hideLogPanel()
 
+        val workflowId = selectedWorkflow?.id
         ApplicationManager.getApplication().executeOnPooledThread {
-            try {
+            val result = runCatching {
                 val workflows = apiService.fetchWorkflows()
-                val runs = apiService.fetchWorkflowRuns(limit = 50)
+                val runs = workflows?.let { apiService.fetchWorkflowRuns(workflowId, limit = 50) }
+                val tags = runs?.let { apiService.fetchVersionTags() }
+                // 워크플로우 수만큼 호출 — 전체 로딩 시에만 하고, 이후는 Run 갱신 결과로 보정
+                val lastSuccess = if (runs == null) emptyList() else workflows
+                    .mapNotNull { wf -> apiService.fetchWorkflowRuns(wf.id, limit = 1, status = "success")?.firstOrNull() }
+                LoadResult(workflows, runs, tags, lastSuccess)
+            }.onFailure { logger.warn("전체 로딩 실패", it) }.getOrNull()
+            if (result?.tags != null) tagsFetchedAt = Instant.now()
 
-                ApplicationManager.getApplication().invokeLater {
-                    if (workflows.isEmpty() && connectionState.isOnline) {
-                        // Actions 미설정 → 안내 카드 표시, 타이머 정지
-                        cardLayout.show(contentPanel, CARD_NO_ACTIONS)
-                        listRefreshTimer.stop()
-                        detailRefreshTimer.stop()
-                        return@invokeLater
-                    }
-                    cardLayout.show(contentPanel, CARD_MAIN)
-                    treePanel.setWorkflows(workflows)
-                    allRuns.clear()
-                    allRuns.addAll(runs)
-                    updateBranchFilter()
-                    applyFilters()
+            onEdt {
+                loadInFlight = false
+                val workflows = result?.workflows
+                val runs = result?.runs
+                // 조회 실패 → 기존 화면 유지, 다음 tick에 전체 로딩 재시도
+                if (workflows == null || runs == null) return@onEdt
+                initialLoadDone = true
+                if (workflows.isEmpty()) {
+                    // Actions 미설정 → 안내 카드 표시, 타이머 정지
+                    cardLayout.show(contentPanel, CARD_NO_ACTIONS)
+                    listRefreshTimer.stop()
+                    detailRefreshTimer.stop()
+                    return@onEdt
                 }
-            } catch (e: Exception) {
-                ApplicationManager.getApplication().invokeLater {
-                    // 오프라인이면 기존 데이터 유지, 온라인 실패만 비움
-                    if (connectionState.isOnline) {
-                        allRuns.clear()
-                        listModel.clear()
-                    }
-                }
+                cardLayout.show(contentPanel, CARD_MAIN)
+                result.tags?.let { versionTags = it }
+                lastSuccessRuns.clear()
+                result.lastSuccess.forEach { lastSuccessRuns[it.workflowId] = it }
+                treePanel.setWorkflows(workflows)
+                allRuns.clear()
+                allRuns.addAll(runs)
+                updateBranchFilter()
+                applyFilters()
+                // 로딩 중 워크플로우 선택이 바뀌었으면 해당 워크플로우 Run으로 다시 조회
+                if (workflowId != selectedWorkflow?.id) refreshRunsSilently()
             }
         }
     }
+
+    private data class LoadResult(
+        val workflows: List<Workflow>?,
+        val runs: List<WorkflowRun>?,
+        val tags: List<VersionTag>?,
+        val lastSuccess: List<WorkflowRun>
+    )
 
     private fun updateBranchFilter() {
         val selectedBranch = branchFilter.selectedItem as? String
@@ -586,30 +677,44 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
     }
 
     private fun refreshRunsSilently() {
-        if (!isSettingsConfigured()) return
+        if (runsRefreshInFlight || !isSettingsConfigured()) return
 
+        runsRefreshInFlight = true
         runsRefreshButton.icon = AnimatedIcon.Default()
+        val workflowId = selectedWorkflow?.id
         ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                val runs = apiService.fetchWorkflowRuns(limit = 50)
-                ApplicationManager.getApplication().invokeLater {
-                    suppressRunSelection = true
-                    try {
-                        allRuns.clear()
-                        allRuns.addAll(runs)
-                        updateBranchFilter()
-                        applyFilters()
-                    } finally {
-                        suppressRunSelection = false
-                        runsRefreshButton.icon = AllIcons.Actions.Refresh
-                    }
+            // 예외·Error가 나도 플래그가 풀리도록 결과와 무관하게 EDT 복귀
+            val runs = runCatching { apiService.fetchWorkflowRuns(workflowId, limit = 50) }
+                .onFailure { logger.warn("Run 목록 갱신 실패", it) }.getOrNull()
+            // 태그는 마지막 조회 이후 성공한 Run(새 real 배포 가능성)이 있을 때만 다시 조회
+            val fetchedAt = tagsFetchedAt
+            val tags = if (runs != null && runs.any { it.isSuccess() && it.updatedAt.isAfter(fetchedAt) }) {
+                runCatching { apiService.fetchVersionTags() }.getOrNull()?.also { tagsFetchedAt = Instant.now() }
+            } else null
+
+            onEdt {
+                runsRefreshInFlight = false
+                runsRefreshButton.icon = AllIcons.Actions.Refresh
+                // 요청 중 워크플로우 선택이 바뀌었으면 결과와 무관하게 다시 조회
+                if (workflowId != selectedWorkflow?.id) {
+                    refreshRunsSilently()
+                    return@onEdt
                 }
-            } catch (_: Exception) {
-                ApplicationManager.getApplication().invokeLater {
-                    runsRefreshButton.icon = AllIcons.Actions.Refresh
-                    if (!connectionState.isOnline) {
-                        offlineBannerLabel.text = GhaBundle.message("banner.offline.checkNetwork")
-                    }
+                if (tags != null) versionTags = tags
+                // 실패 시 기존 목록 유지
+                if (runs == null) {
+                    if (!connectionState.isOnline) offlineBannerLabel.text = GhaBundle.message("banner.offline.checkNetwork")
+                    return@onEdt
+                }
+                suppressRunSelection = true
+                try {
+                    allRuns.clear()
+                    allRuns.addAll(runs)
+                    updateLastSuccessRuns(runs)
+                    updateBranchFilter()
+                    applyFilters()
+                } finally {
+                    suppressRunSelection = false
                 }
             }
         }
@@ -621,8 +726,105 @@ class GitHubActionsToolWindowPanel(private val project: Project) : JPanel(Border
     private fun showDispatchDialog(workflow: Workflow) {
         WorkflowDispatchDialog.showWithInputs(
             project, workflow,
-            cachedRuns = allRuns.toList()
+            cachedRuns = allRuns.toList(),
+            onDispatched = ::refreshRunsSilently,
+            versionSuggestions = versionSuggestions()
         )
+    }
+
+    /**
+     * 선택한 Run의 버전으로 재배포(롤백) — redeploy_tag 입력을 미리 채운 Dispatch
+     */
+    private fun showRedeployDialog(run: WorkflowRun, version: String) {
+        val workflow = treePanel.findWorkflow(run.workflowId) ?: return
+        WorkflowDispatchDialog.showWithInputs(
+            project, workflow,
+            cachedRuns = allRuns.toList(),
+            onDispatched = ::refreshRunsSilently,
+            presetInputs = mapOf(REDEPLOY_TAG_INPUT to version),
+            versionSuggestions = versionSuggestions(),
+            branchOverride = run.headBranch
+        )
+    }
+
+    private fun versionOf(run: WorkflowRun): String? = findVersionTag(run, versionTags)?.version
+
+    /** 최근 버전 태그 (최신순, 중복 제거) — redeploy_tag 선택지 */
+    private fun versionSuggestions(): List<String> =
+        versionTags.sortedByDescending { it.createdAt }.map { it.version }.distinct().take(20)
+
+    /** 트리 요약: ✓ 버전(없으면 #번호) · 시각 */
+    private fun workflowSummary(workflow: Workflow): String? {
+        val run = lastSuccessRuns[workflow.id] ?: return null
+        val label = versionOf(run) ?: "#${run.runNumber}"
+        val time = run.updatedAt.atZone(ZoneId.systemDefault()).format(shortTimeFormatter)
+        return "\u2713 $label \u00b7 $time"
+    }
+
+    /** 갱신된 Run 중 더 최근 성공이 있으면 트리 요약 보정 (추가 API 호출 없음) */
+    private fun updateLastSuccessRuns(runs: List<WorkflowRun>) {
+        var changed = false
+        runs.filter { it.isSuccess() }.groupBy { it.workflowId }.forEach { (id, list) ->
+            val latest = list.maxBy { it.updatedAt }
+            val current = lastSuccessRuns[id]
+            if (current == null || latest.updatedAt > current.updatedAt) {
+                lastSuccessRuns[id] = latest
+                changed = true
+            }
+        }
+        if (changed) treePanel.tree.repaint()
+    }
+
+    /**
+     * Run 우클릭 메뉴: 웹 열기 / 다시 실행 / 실패 Job만 다시 실행 / 취소
+     */
+    private fun buildRunPopup(run: WorkflowRun): JPopupMenu {
+        val popup = JPopupMenu()
+        popup.add(JMenuItem(GhaBundle.message("contextMenu.openWeb"), AllIcons.General.Web).apply {
+            addActionListener { BrowserUtil.browse(run.htmlUrl) }
+        })
+        popup.addSeparator()
+        popup.add(JMenuItem(GhaBundle.message("run.rerun"), AllIcons.Actions.Restart).apply {
+            isEnabled = run.isCompleted()
+            addActionListener { runAction(GhaBundle.message("run.rerun"), run) { apiService.rerunWorkflowRun(it.id) } }
+        })
+        popup.add(JMenuItem(GhaBundle.message("run.rerunFailed"), AllIcons.Actions.Restart).apply {
+            isEnabled = run.isCompleted() && (run.isFailed() || run.isCancelled())
+            addActionListener { runAction(GhaBundle.message("run.rerunFailed"), run) { apiService.rerunFailedJobs(it.id) } }
+        })
+        val version = versionOf(run)
+        popup.add(JMenuItem(GhaBundle.message("run.redeploy", version ?: "-"), AllIcons.Actions.Rollback).apply {
+            isEnabled = version != null
+            toolTipText = GhaBundle.message("run.redeploy.tooltip")
+            addActionListener { version?.let { showRedeployDialog(run, it) } }
+        })
+        popup.add(JMenuItem(GhaBundle.message("run.cancel"), AllIcons.Actions.Suspend).apply {
+            isEnabled = run.isInProgress()
+            addActionListener {
+                val confirmed = Messages.showYesNoDialog(
+                    project, GhaBundle.message("run.cancel.confirm", run.name, run.runNumber),
+                    GhaBundle.message("run.cancel"), null
+                ) == Messages.YES
+                if (confirmed) runAction(GhaBundle.message("run.cancel"), run) { apiService.cancelWorkflowRun(it.id) }
+            }
+        })
+        return popup
+    }
+
+    /** Run 대상 POST 액션을 백그라운드에서 실행하고 결과를 알림으로 표시 */
+    private fun runAction(title: String, run: WorkflowRun, call: (WorkflowRun) -> PostResult) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = call(run)
+            onEdt {
+                val target = "${run.name} #${run.runNumber}"
+                if (result.success) {
+                    GhaNotifications.info(project, GhaBundle.message("run.action.success", title, target))
+                    refreshRunsSilently()
+                } else {
+                    GhaNotifications.error(project, GhaBundle.message("run.action.failure", title, target, result.errorMessage.orEmpty()))
+                }
+            }
+        }
     }
 
     /**

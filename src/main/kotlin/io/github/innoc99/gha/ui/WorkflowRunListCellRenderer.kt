@@ -7,6 +7,7 @@ import io.github.innoc99.gha.model.WorkflowRun
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.FlowLayout
+import java.awt.Font
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.swing.*
@@ -15,7 +16,10 @@ import javax.swing.*
  * 워크플로우 실행 목록의 커스텀 셀 렌더러
  * 2줄 레이아웃: [상태아이콘] 워크플로우명 / #번호 by actor . 날짜 / 브랜치라벨
  */
-class WorkflowRunListCellRenderer : ListCellRenderer<WorkflowRun> {
+class WorkflowRunListCellRenderer(
+    /** Run이 만든 배포 버전 태그 (없으면 null) */
+    private val versionOf: (WorkflowRun) -> String? = { null }
+) : ListCellRenderer<WorkflowRun> {
 
     private val formatter = DateTimeFormatter.ofPattern("MM/dd HH:mm")
 
@@ -66,6 +70,13 @@ class WorkflowRunListCellRenderer : ListCellRenderer<WorkflowRun> {
         // 우측: 브랜치 라벨 + 이벤트
         val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
             isOpaque = false
+        }
+
+        versionOf(value)?.let { version ->
+            rightPanel.add(JLabel(version, AllIcons.Nodes.Tag, SwingConstants.LEFT).apply {
+                font = font.deriveFont(Font.BOLD, font.size2D - 1f)
+                foreground = if (isSelected) list.selectionForeground else JBColor(0x1a7f37, 0x3fb950)
+            })
         }
 
         val branchLabel = JLabel(value.headBranch).apply {

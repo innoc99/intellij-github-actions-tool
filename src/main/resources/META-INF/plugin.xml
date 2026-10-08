@@ -12,15 +12,17 @@
     <!-- 플러그인 설명 -->
     <description><![CDATA[
     <h2>GitHub Actions Tool</h2>
-    <p>A GitHub Actions workflow monitoring and execution tool for GitHub Enterprise (On-Prem) environments.<br>
-    Monitor workflow status, view logs, and trigger manual dispatches — all from within the IDE.</p>
+    <p>A GitHub Actions workflow monitoring and execution tool for GitHub.com and GitHub Enterprise Server.<br>
+    Monitor workflow status, view logs, re-run, cancel, and trigger manual dispatches — all from within the IDE.</p>
 
     <h3>Features</h3>
     <ul>
         <li><b>Workflow Monitoring</b> — Auto-refresh workflow list and run statuses in real time</li>
         <li><b>Manual Dispatch</b> — Trigger workflow_dispatch workflows directly from the IDE</li>
-        <li><b>Jobs/Steps Detail</b> — View Job tree and Step-level logs in GitHub Enterprise style</li>
-        <li><b>Log Search</b> — Search keywords in Step logs with auto-highlight and expand</li>
+        <li><b>Re-run / Cancel</b> — Re-run all jobs, re-run failed jobs, or cancel a run from the context menu</li>
+        <li><b>Failure Summary</b> — Job annotations (errors and warnings) shown above the log</li>
+        <li><b>Log Viewer</b> — Editor-based log with step/group folding, error highlighting, and search</li>
+        <li><b>Release Versions &amp; Redeploy</b> — Shows version tags (<code>name-vYYYY.MM.DD.HHmm</code>) on runs and redeploys a selected version via a <code>redeploy_tag</code> dispatch input</li>
         <li><b>Status/Branch Filters</b> — Filter runs by conclusion (success, failure, etc.) and branch</li>
         <li><b>Quick Search</b> — Instant name search in the Run list (Speed Search)</li>
         <li><b>VCS Auto-Detection</b> — Automatically detect GitHub server/owner/repository from Git remote</li>
@@ -30,7 +32,7 @@
     <h3>Layout</h3>
     <p>The Tool Window consists of 4 panels:</p>
     <ol>
-        <li><b>Workflow Tree</b> — Full workflow list. Select "All History" or a specific workflow</li>
+        <li><b>Workflow Tree</b> — Full workflow list with the last successful run of each workflow</li>
         <li><b>Run List</b> — Recent runs for the selected workflow. Status/branch filters available</li>
         <li><b>Jobs Detail Tree</b> — Job list for the selected Run, displayed as a grouped tree</li>
         <li><b>Step Log Panel</b> — Collapsible log view per Step for the selected Job</li>
@@ -75,6 +77,9 @@
                     anchor="bottom"
                     factoryClass="io.github.innoc99.gha.ui.GitHubActionsToolWindowFactory"/>
 
+        <!-- 실행 결과 알림 (Dispatch, Re-run, Cancel) -->
+        <notificationGroup id="GitHub Actions Tool" displayType="BALLOON" key="notification.group"/>
+
         <!-- Settings 페이지 등록 -->
         <projectConfigurable parentId="tools"
                             instance="io.github.innoc99.gha.settings.GitHubActionsSettingsConfigurable"
@@ -87,7 +92,6 @@
         <!-- Project Service 등록 -->
         <projectService serviceImplementation="io.github.innoc99.gha.settings.GitHubActionsSettings"/>
         <projectService serviceImplementation="io.github.innoc99.gha.service.GitHubApiService"/>
-        <projectService serviceImplementation="io.github.innoc99.gha.service.WorkflowMonitorService"/>
         <projectService serviceImplementation="io.github.innoc99.gha.service.ConnectionStateManager"/>
     </extensions>
 
@@ -97,10 +101,6 @@
             <action id="GitHubActions.Refresh"
                     class="io.github.innoc99.gha.action.RefreshWorkflowsAction"
                     icon="AllIcons.Actions.Refresh"/>
-
-            <action id="GitHubActions.RunWorkflow"
-                    class="io.github.innoc99.gha.action.RunWorkflowAction"
-                    icon="AllIcons.Actions.Execute"/>
 
             <action id="GitHubActions.TestLocally"
                     class="io.github.innoc99.gha.action.TestWorkflowLocallyAction"

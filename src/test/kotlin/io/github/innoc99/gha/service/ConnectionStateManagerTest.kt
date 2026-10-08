@@ -102,4 +102,15 @@ class ConnectionStateManagerTest {
         manager.recordSuccess()
         assertNotNull(manager.lastSuccessTime)
     }
+
+    @Test
+    fun `여러 스레드가 동시에 실패를 기록해도 OFFLINE 알림은 1회만 발생한다`() {
+        val threads = (1..50).map { Thread { manager.recordFailure() } }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+
+        assertEquals(ConnectionState.OFFLINE, manager.state)
+        assertEquals(listOf(ConnectionState.OFFLINE), stateChanges)
+        manager.dispose()
+    }
 }

@@ -1,6 +1,8 @@
 package io.github.innoc99.gha.ui
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
@@ -12,12 +14,16 @@ import com.intellij.openapi.diagnostic.Logger
 import io.github.innoc99.gha.GhaBundle
 import io.github.innoc99.gha.model.DispatchInput
 import io.github.innoc99.gha.model.Workflow
+import io.github.innoc99.gha.model.REDEPLOY_TAG_INPUT
 import io.github.innoc99.gha.model.WorkflowRun
+import io.github.innoc99.gha.model.isValidRedeployTag
 import io.github.innoc99.gha.service.GitHubApiService
+import io.github.innoc99.gha.service.PostResult
 import git4idea.repo.GitRepositoryManager
 import java.awt.BorderLayout
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
+import java.time.Instant
 import javax.swing.*
 
 /**
@@ -29,7 +35,15 @@ class WorkflowDispatchDialog(
     private val workflow: Workflow,
     private val dispatchInputs: List<DispatchInput> = emptyList(),
     branches: List<String> = emptyList(),
-    defaultBranch: String = "main"
+    defaultBranch: String = "main",
+    /** Dispatch 성공 시 호출 (EDT) */
+    private val onDispatched: (() -> Unit)? = null,
+    /** 입력 기본값 덮어쓰기 (롤백 시 redeploy_tag 등) */
+    private val presetInputs: Map<String, String> = emptyMap(),
+    /** redeploy_tag 선택지 (최근 버전 태그) */
+    private val versionSuggestions: List<String> = emptyList(),
+    /** 같은 real 워크플로우가 1분 내 실행됨 — 같은 분 재실행은 버전 태그 충돌로 실패 */
+    private val recentRealRun: Boolean = false
 ) : DialogWrapper(project) {
 
     private val branchComboBox = ComboBox<String>().apply {
@@ -97,19 +111,27 @@ class WorkflowDispatchDialog(
     }
 
     private fun createInputComponent(input: DispatchInput): JComponent {
+        val initial = presetInputs[input.name] ?: input.default
+        if (input.name == REDEPLOY_TAG_INPUT && input.type == DispatchInput.InputType.STRING) {
+            // 빈 값 = 빌드 후 배포, 버전 선택 = 해당 이미지로 재배포(롤백)
+            return ComboBox((listOf("") + versionSuggestions).toTypedArray()).apply {
+                isEditable = true
+                selectedItem = initial.orEmpty()
+            }
+        }
         return when (input.type) {
             DispatchInput.InputType.CHOICE -> {
                 JComboBox(input.options.toTypedArray()).apply {
-                    if (input.default != null) selectedItem = input.default
+                    if (initial != null) selectedItem = initial
                 }
             }
             DispatchInput.InputType.BOOLEAN -> {
                 JBCheckBox().apply {
-                    isSelected = input.default?.toBoolean() ?: false
+                    isSelected = initial?.toBoolean() ?: false
                 }
             }
             else -> {
-                JBTextField(input.default ?: "").apply { columns = 25 }
+                JBTextField(initial ?: "").apply { columns = 25 }
             }
         }
     }
@@ -117,7 +139,8 @@ class WorkflowDispatchDialog(
     private fun getInputValue(input: DispatchInput): String {
         val component = inputComponents[input.name] ?: return input.default ?: ""
         return when (component) {
-            is JComboBox<*> -> component.selectedItem?.toString() ?: ""
+            // 편집 가능한 콤보는 입력 중인 텍스트가 selectedItem에 아직 반영되지 않았을 수 있음
+            is JComboBox<*> -> (if (component.isEditable) component.editor.item else component.selectedItem)?.toString()?.trim().orEmpty()
             is JBCheckBox -> component.isSelected.toString()
             is JBTextField -> component.text.trim()
             else -> ""
@@ -147,20 +170,50 @@ class WorkflowDispatchDialog(
         }
 
         val inputs = dispatchInputs.associate { it.name to getInputValue(it) }
-        val apiService = GitHubApiService.getInstance(project)
-        val success = apiService.dispatchWorkflow(workflow.id, ref, inputs)
 
-        if (success) {
-            Messages.showInfoMessage(project, GhaBundle.message("dispatch.success.message", workflow.name, ref), GhaBundle.message("dispatch.success.title"))
-        } else {
-            Messages.showErrorDialog(project, GhaBundle.message("dispatch.failure.message"), GhaBundle.message("dispatch.failure.title"))
+        // redeploy_tag 형식은 서버가 job 시작 후에야 거부하므로 미리 확인
+        inputs[REDEPLOY_TAG_INPUT]?.let { tag ->
+            if (!isValidRedeployTag(tag)) {
+                Messages.showWarningDialog(project, GhaBundle.message("dispatch.invalidRedeployTag", tag), GhaBundle.message("dispatch.inputError"))
+                return
+            }
         }
+        if (recentRealRun && Messages.showYesNoDialog(
+                project, GhaBundle.message("dispatch.recentRealRun"), GhaBundle.message("dispatch.recentRealRun.title"), null
+            ) != Messages.YES
+        ) return
 
         super.doOKAction()
+
+        // 네트워크·Keychain 접근이 있으므로 EDT를 막지 않도록 백그라운드에서 실행
+        object : Task.Backgroundable(project, GhaBundle.message("dispatch.progress", workflow.name), false) {
+            private var result: PostResult? = null
+
+            override fun run(indicator: ProgressIndicator) {
+                result = GitHubApiService.getInstance(project).dispatchWorkflow(workflow.id, ref, inputs)
+            }
+
+            override fun onSuccess() {
+                val r = result ?: return
+                if (r.success) {
+                    GhaNotifications.info(project, GhaBundle.message("dispatch.success.message", workflow.name, ref))
+                    onDispatched?.invoke()
+                } else {
+                    val detail = r.errorMessage?.let { "<br>$it" } ?: ""  // executePost에서 이스케이프됨
+                    GhaNotifications.error(project, GhaBundle.message("dispatch.failure.message") + detail)
+                }
+            }
+        }.queue()
     }
 
     companion object {
         private val logger = Logger.getInstance(WorkflowDispatchDialog::class.java)
+
+        private val REAL_NAME_PATTERN = Regex("(?i)\\breal\\b")
+
+        /** 워크플로우 이름(`3) | Real ...`) 또는 파일명(`real-build-deploy.yml`)으로 real 배포 워크플로우 판단 */
+        private fun isRealWorkflow(workflow: Workflow): Boolean =
+            REAL_NAME_PATTERN.containsMatchIn(workflow.name) || workflow.path.substringAfterLast('/').startsWith("real-")
 
         /**
          * inputs와 브랜치 목록을 백그라운드에서 로딩 후 다이얼로그 표시
@@ -171,7 +224,11 @@ class WorkflowDispatchDialog(
             project: Project,
             workflow: Workflow,
             cachedRuns: List<WorkflowRun> = emptyList(),
-            onLoadingChanged: ((Boolean) -> Unit)? = null
+            onLoadingChanged: ((Boolean) -> Unit)? = null,
+            onDispatched: (() -> Unit)? = null,
+            presetInputs: Map<String, String> = emptyMap(),
+            versionSuggestions: List<String> = emptyList(),
+            branchOverride: String? = null
         ) {
             onLoadingChanged?.invoke(true)
             ApplicationManager.getApplication().executeOnPooledThread {
@@ -180,37 +237,49 @@ class WorkflowDispatchDialog(
                     apiService.fetchDispatchInputs(workflow.path)
                 } catch (e: Exception) {
                     logger.warn("dispatch inputs 로딩 실패", e)
-                    emptyList()
+                    null
                 }
-                val runs = if (cachedRuns.isNotEmpty()) cachedRuns
-                else try {
-                    apiService.fetchWorkflowRuns(limit = 100)
-                } catch (e: Exception) {
-                    emptyList()
-                }
-                val branches = runs.map { it.headBranch }.distinct().sorted()
+                // 직전 실행 판단(기본 브랜치, real 재실행 경고)은 이 워크플로우의 최신 Run으로 — 화면 목록은 다른 워크플로우 것일 수 있음
+                val workflowRuns = apiService.fetchWorkflowRuns(workflow.id, limit = 20)
+                    ?: cachedRuns.filter { it.workflowId == workflow.id }
+                val branches = (cachedRuns + workflowRuns).map { it.headBranch }.filter { it.isNotBlank() }.distinct().sorted()
 
                 // 기본 브랜치 우선순위: 해당 워크플로우 마지막 실행 브랜치 > git 현재 브랜치 > main > master
-                val lastRunBranch = runs
-                    .filter { it.workflowId == workflow.id }
-                    .maxByOrNull { it.createdAt }
-                    ?.headBranch
+                val lastRunBranch = workflowRuns.maxByOrNull { it.createdAt }?.headBranch
                 val currentGitBranch = try {
                     GitRepositoryManager.getInstance(project)
                         .repositories.firstOrNull()
                         ?.currentBranch?.name
                 } catch (_: Exception) { null }
 
-                val defaultBranch = lastRunBranch
+                val defaultBranch = branchOverride
+                    ?: lastRunBranch
                     ?: currentGitBranch
                     ?: if (branches.contains("main")) "main"
                        else if (branches.contains("master")) "master"
                        else branches.firstOrNull() ?: "main"
 
-                ApplicationManager.getApplication().invokeLater {
-                    onLoadingChanged?.invoke(false)
-                    WorkflowDispatchDialog(project, workflow, inputs, branches, defaultBranch).show()
+                // 롤백 등으로 미리 채울 입력이 워크플로우에 없으면 일반 배포가 돌지 않도록 중단
+                val missing = presetInputs.keys - inputs.orEmpty().map { it.name }.toSet()
+                val recentRealRun = isRealWorkflow(workflow) && workflowRuns.any {
+                    it.createdAt.isAfter(Instant.now().minusSeconds(60))
                 }
+
+                ApplicationManager.getApplication().invokeLater({
+                    onLoadingChanged?.invoke(false)
+                    if (inputs == null) {
+                        GhaNotifications.error(project, GhaBundle.message("dispatch.inputsLoadFailed", workflow.name))
+                        return@invokeLater
+                    }
+                    if (missing.isNotEmpty()) {
+                        GhaNotifications.error(project, GhaBundle.message("dispatch.missingInput", workflow.name, missing.joinToString()))
+                        return@invokeLater
+                    }
+                    WorkflowDispatchDialog(
+                        project, workflow, inputs, branches, defaultBranch, onDispatched,
+                        presetInputs, versionSuggestions, recentRealRun
+                    ).show()
+                }, project.disposed)
             }
         }
     }
