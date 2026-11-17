@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "io.github.innoc99"
-version = "1.2.0"
+version = "1.2.1"
 
 repositories {
     mavenCentral()
@@ -52,6 +52,10 @@ kotlin {
 intellijPlatform {
     pluginConfiguration {
         changeNotes = """
+            <h3>1.2.1</h3>
+            <ul>
+              <li>IntelliJ IDEA 2026.3 support</li>
+            </ul>
             <h3>1.2.0</h3>
             <ul>
               <li>GitHub.com support (api.github.com) in addition to GitHub Enterprise Server</li>
@@ -68,7 +72,7 @@ intellijPlatform {
 
         ideaVersion {
             sinceBuild = "241"
-            untilBuild = "262.*"
+            untilBuild = provider { null }
         }
     }
 
@@ -87,7 +91,7 @@ intellijPlatform {
             // 최소 지원 / 마지막 Community / 최신 통합판 — 전체(recommended)는 다운로드가 10GB 이상
             create(IntelliJPlatformType.IntellijIdeaCommunity, "2024.1.7")
             create(IntelliJPlatformType.IntellijIdeaCommunity, "2025.2.6.3")
-            create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
+            create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.3")
         }
     }
 }
